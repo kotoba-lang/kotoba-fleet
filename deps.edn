@@ -1,0 +1,19 @@
+{:paths ["src"]
+ ;; Zero-dep, portable .cljc. The fleet-coordination substrate for running many
+ ;; terminal coding agents in parallel without git conflict (ADR-2606302000):
+ ;; lease (optimistic, lock-server-free) + governor-drain (single git writer) +
+ ;; fleet-view, all as append-only datoms on a :db-api. Pure data + pure
+ ;; functions; the backend (in-mem MemStore here ≡ langchain.db / kotoba-db in
+ ;; production) is injected as a {:transact! :datoms :by :entity} map.
+ :deps {}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test
+         :exec-args {:dirs ["test"]}}
+  :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
+         :main-opts    ["-m" "clj-kondo.main"
+                        "--lint" "src" "test"
+                        "--fail-level" "error"]}}}
