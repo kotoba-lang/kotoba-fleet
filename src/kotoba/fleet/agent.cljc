@@ -62,3 +62,16 @@
   (materialized or held) — frees the unit for the next round."
   [db {:keys [unit agent now]}]
   (lease/release! db {:work unit :agent agent :now now}))
+
+(defn close-work!
+  "Mark a work-unit `:done` (append-only) so it drops out of `open-work` — called
+  once its proposal has materialized. Without this a durable driver would re-pick
+  the same unit every round. Returns {:closed work-id} or nil if unknown."
+  [db unit]
+  (when-let [wid (->> (work-entities db)
+                      (filter #(= unit (:work/unit %)))
+                      first
+                      :work/id)]
+    (let [t (store/next-t db)]
+      (store/transact! db [[wid :work/state :done t]])
+      {:closed wid})))

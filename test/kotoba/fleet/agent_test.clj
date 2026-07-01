@@ -46,6 +46,14 @@
       (is (nil? (lease/holder db "src/a.clj" 1)) "lease released")
       (is (empty? (gov/pending-proposals db))))))
 
+(deftest close-work-removes-from-open
+  (testing "a closed (done) work-unit no longer appears as open"
+    (let [db (store/mem-store)]
+      (agent/enqueue! db {:unit "src/a.clj" :created-by "root"})
+      (is (seq (agent/open-work db 0)))
+      (agent/close-work! db "src/a.clj")
+      (is (empty? (agent/open-work db 1)) "done work is not re-picked"))))
+
 (deftest end-to-end-agent-then-governor
   (testing "agent proposes → governor drains → materialized once"
     (let [db    (store/mem-store)
