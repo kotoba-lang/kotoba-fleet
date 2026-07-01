@@ -19,13 +19,14 @@
        (mapv #(store/entity db %))))
 
 (defn submit-proposal!
-  "Append a write-intent proposal for `agent` on `work`. Returns the proposal id."
-  [db {:keys [work agent payload now]}]
+  "Append a write-intent proposal for `agent` on `work`. Returns the proposal id.
+  `now` is accepted for symmetry but ordering is captured by the append ordinal."
+  [db {:keys [work agent payload]}]
   (let [t   (store/next-t db)
         pid (str "prop|" work "|" agent "|" t)
         ent {:proposal/id pid :proposal/work work :proposal/agent agent
              :proposal/payload payload :proposal/t t}]
-    (store/transact! db (schema/entity->datoms (assoc ent :proposal/now now) t))
+    (store/transact! db (schema/entity->datoms ent t))
     pid))
 
 (defn pending-proposals
@@ -38,32 +39,39 @@
          (remove #(contains? done (:proposal/id %)))
          (sort-by :proposal/t))))
 
-(defn- receipt!
-  [db proposal verdict reason now]
+(defn record!
+  "Append a governor receipt for proposal `proposal-id` on `work` with `verdict`
+  (:accepted | :rejected) and optional `reason`. Append-only. Once a receipt
+  exists for a proposal, it is no longer `pending-proposals` — so a decided
+  proposal is never re-materialized. This is the single place the governor
+  commits a decision, whether reached by `drain!` or by an actor graph."
+  [db {:keys [proposal-id work verdict reason]}]
   (let [t   (store/next-t db)
-        rid (str "rcpt|" (:proposal/id proposal) "|" t)
+        rid (str "rcpt|" proposal-id "|" t)
         ent {:receipt/id rid
-             :receipt/proposal (:proposal/id proposal)
-             :receipt/work (:proposal/work proposal)
+             :receipt/proposal proposal-id
+             :receipt/work work
              :receipt/verdict verdict
              :receipt/reason reason
              :receipt/t t}]
-    (store/transact! db (schema/entity->datoms (assoc ent :receipt/now now) t))
+    (store/transact! db (schema/entity->datoms ent t))
     ent))
 
 (defn drain!
   "Drain pending proposals through `gate` then `materialize` (single writer).
-  Opts: {:gate (fn [proposal] truthy?) :materialize (fn [proposal] …) :now t}.
+  Opts: {:gate (fn [proposal] truthy?) :materialize (fn [proposal] …)}.
   Accepted proposals are materialized; a throwing materialize is caught and the
   proposal is rejected (never leaves git half-written). Returns the receipts."
-  [db {:keys [gate materialize now]}]
+  [db {:keys [gate materialize]}]
   (mapv
    (fn [p]
-     (if (gate p)
-       (try
-         (when materialize (materialize p))
-         (receipt! db p :accepted nil now)
-         (catch #?(:clj Exception :cljs :default) e
-           (receipt! db p :rejected (str "materialize-error: " (ex-message e)) now)))
-       (receipt! db p :rejected "gate-rejected" now)))
+     (let [base {:proposal-id (:proposal/id p) :work (:proposal/work p)}]
+       (if (gate p)
+         (try
+           (when materialize (materialize p))
+           (record! db (assoc base :verdict :accepted))
+           (catch #?(:clj Exception :cljs :default) e
+             (record! db (assoc base :verdict :rejected
+                                :reason (str "materialize-error: " (ex-message e))))))
+         (record! db (assoc base :verdict :rejected :reason "gate-rejected")))))
    (pending-proposals db)))

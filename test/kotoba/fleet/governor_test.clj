@@ -4,6 +4,14 @@
             [kotoba.fleet.governor :as gov]
             [kotoba.fleet.store :as store]))
 
+(deftest record-drains-proposal
+  (testing "record! receipts a proposal so it is no longer pending (drains once)"
+    (let [db  (store/mem-store)
+          pid (gov/submit-proposal! db {:work "w" :agent "A" :payload 1})]
+      (is (= 1 (count (gov/pending-proposals db))) "pending before receipt")
+      (gov/record! db {:proposal-id pid :work "w" :verdict :accepted})
+      (is (empty? (gov/pending-proposals db)) "no longer pending after receipt"))))
+
 (deftest gate-accepts-and-rejects
   (testing "governor materializes accepted proposals, rejects the rest"
     (let [db        (store/mem-store)
