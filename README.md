@@ -34,6 +34,10 @@ by swapping the map):
 ```
 
 `kotoba.fleet.store/mem-store` is the in-memory implementation used by tests.
+`kotoba.fleet.kotoba-store/db-api-store` backs the same contract with a langchain
+db-api map (`langchain.db` in-process, or `langchain.kotoba-db` over kotobase.net
+XRPC with CACAO) — so the identical lease/governor/agent code runs on a real
+Datom log. `clojure -M:kotoba` runs the MemStore ≡ backend parity test.
 
 ## Usage
 
