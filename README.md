@@ -12,6 +12,7 @@ makes conflict *structurally impossible* with three primitives:
 | primitive | ns | what it gives |
 |---|---|---|
 | **lease** | `kotoba.fleet.lease` | optimistic, lock-server-free mutual exclusion over work-units. Claim = append a `:lease/*` datom; the holder is the **deterministic earliest active claim** (CRDT-style). TTL + crash re-lease. |
+| **agent loop** | `kotoba.fleet.agent` | the agent side: pull open work → optimistically lease → run the injected `run` fn (a **kotoba-code** session in prod) → submit a `:proposal/*`. Loses the race → backs off. This is the kotoba-code integration seam. |
 | **governor-drain** | `kotoba.fleet.governor` | agents only *append* `:proposal/*` datoms; a single per-repo governor gates them and materializes accepted ones to git, appending a `:receipt/*`. → git never sees N concurrent writers (the actor invariant). |
 | **fleet-view** | `kotoba.fleet.view` | aggregate live leases / TTL / progress across the fleet into one view. |
 
