@@ -21,8 +21,9 @@
   ;; (langchain.db in-process; same contract as langchain.kotoba-db XRPC). Kept
   ;; off the zero-dep :test path so the core lib stays dependency-free.
   :kotoba {:extra-paths ["test-kotoba"]
-           :extra-deps {io.github.com-junkawasaki/langchain-clj
-                        {:local/root "../../com-junkawasaki/langchain-clj"}
+           :extra-deps {io.github.kotoba-lang/langchain
+                        {:git/url "https://github.com/kotoba-lang/langchain.git"
+                         :sha "c7943d7542f28242a654ff3e0c37100b48a9417d"}
                         io.github.cognitect-labs/test-runner
                         {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
            :main-opts ["-m" "cognitect.test-runner" "-d" "test-kotoba"]}}}
