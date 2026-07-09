@@ -24,12 +24,14 @@
 (defn enqueue!
   "Append an OPEN work-unit (a repo / module / file-set to be done). Returns id."
   [db {:keys [unit created-by]}]
-  (let [t   (store/next-t db)
-        id  (str "work|" unit "|" t)
-        ent {:work/id id :work/unit unit :work/state :open
-             :work/created-by created-by :work/t t}]
-    (store/transact! db (schema/entity->datoms ent t))
-    id))
+  (let [{:keys [t]} (store/transact-with-t!
+                     db
+                     (fn [t]
+                       (schema/entity->datoms
+                        {:work/id (str "work|" unit "|" t) :work/unit unit
+                         :work/state :open :work/created-by created-by :work/t t}
+                        t)))]
+    (str "work|" unit "|" t)))
 
 (defn open-work
   "Open work-units with no active lease at `now` — free for an agent to claim."
@@ -72,6 +74,5 @@
                       (filter #(= unit (:work/unit %)))
                       first
                       :work/id)]
-    (let [t (store/next-t db)]
-      (store/transact! db [[wid :work/state :done t]])
-      {:closed wid})))
+    (store/transact-with-t! db (fn [t] [[wid :work/state :done t]]))
+    {:closed wid}))

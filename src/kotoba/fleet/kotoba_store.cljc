@@ -30,13 +30,29 @@
   "Adapt a langchain `{:api {:q :transact! :db :pull :entid} :conn conn}` into a
   fleet store `{:transact! :datoms :by :entity}` over reified `:fd/*` datoms."
   [{:keys [api conn]}]
-  (let [dbv (fn [] ((:db api) conn))]
+  (let [dbv (fn [] ((:db api) conn))
+        cur-t-count (fn [] (count ((:q api) '[:find [?x ...] :where [?x :fd/t _]] (dbv))))]
     {:transact!
      (fn [datoms]
        ((:transact! api) conn
         (mapv (fn [[e a v t]] {:fd/e (enc e) :fd/a (enc a) :fd/v (enc v) :fd/t t})
               datoms))
        {:added (count datoms)})
+
+     ;; best-effort: the abstract langchain :db-api has no compare-and-swap
+     ;; primitive to build this atomically the way MemStore's swap! does, so
+     ;; a genuine race between two db-api-store-backed callers can still
+     ;; collide on t (same residual limitation already documented for
+     ;; kagi.store's KotobaStore append-chained-ledger! -- closes the race
+     ;; for the default, always-available MemStore backend).
+     :transact-with-t!
+     (fn [build-fn]
+       (let [t (cur-t-count)
+             ds (vec (build-fn t))]
+         ((:transact! api) conn
+          (mapv (fn [[e a v dt]] {:fd/e (enc e) :fd/a (enc a) :fd/v (enc v) :fd/t dt})
+                ds))
+         {:t t :added (count ds)}))
 
      :datoms
      (fn []
