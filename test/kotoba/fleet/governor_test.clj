@@ -59,6 +59,17 @@
                       :now 3})
       (is (= [1 2] @order) "second drain materializes nothing (idempotent)"))))
 
+(deftest idempotent-proposal-submission-has-one-pending-entity
+  (let [db (store/mem-store)
+        input {:work "cloud-murakumo/model-catalog/qwen" :agent "shinka"
+               :payload {:kind :catalog-reconcile} :idempotency-key "catalog/qwen/runtime-v1"}
+        first-id (gov/submit-proposal! db input)
+        retry-id (gov/submit-proposal! db input)]
+    (is (= first-id retry-id))
+    (is (= 1 (count (gov/pending-proposals db))))
+    (is (= "catalog/qwen/runtime-v1"
+           (:proposal/idempotency-key (first (gov/pending-proposals db)))))))
+
 (deftest materialize-error-rejects-not-crashes
   (testing "a throwing materialize is caught and recorded as a rejection"
     (let [db (store/mem-store)]

@@ -18,7 +18,7 @@
    :lease    #{:lease/id :lease/work :lease/agent :lease/granted-at
                :lease/ttl-ms :lease/released :lease/t}
    :proposal #{:proposal/id :proposal/work :proposal/agent :proposal/payload
-               :proposal/t}
+               :proposal/idempotency-key :proposal/t}
    :claim    #{:claim/id :claim/work :claim/agent :claim/t}
    :receipt  #{:receipt/id :receipt/proposal :receipt/work :receipt/verdict
                :receipt/reason :receipt/t}})

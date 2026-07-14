@@ -20,22 +20,25 @@
 
 (defn submit-proposal!
   "Append a write-intent proposal for `agent` on `work`. Returns the proposal id.
-  `now` is accepted for symmetry but ordering is captured by the append ordinal.
+  `:idempotency-key`, when supplied, gives repeat submissions the same entity id
+  and therefore exactly one pending proposal. `now` is accepted for symmetry but
+  ordering is captured by the append ordinal.
 
   t is assigned atomically WITH the append (store/transact-with-t!) -- a
   separate next-t read followed by transact! let two concurrent submitters
   compute the same t (verified against 50 real concurrent threads: as few as
   23 distinct t values came out of 50 submissions)."
-  [db {:keys [work agent payload]}]
+  [db {:keys [work agent payload idempotency-key]}]
   (let [{:keys [t]} (store/transact-with-t!
                      db
                      (fn [t]
                        (schema/entity->datoms
-                        {:proposal/id (str "prop|" work "|" agent "|" t)
+                        {:proposal/id (str "prop|" work "|" agent "|" (or idempotency-key t))
                          :proposal/work work :proposal/agent agent
-                         :proposal/payload payload :proposal/t t}
+                         :proposal/payload payload :proposal/idempotency-key idempotency-key
+                         :proposal/t t}
                         t)))]
-    (str "prop|" work "|" agent "|" t)))
+    (str "prop|" work "|" agent "|" (or idempotency-key t))))
 
 (defn pending-proposals
   "Proposals (in causal order) that have not yet been receipted."
