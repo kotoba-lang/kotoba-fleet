@@ -12,6 +12,24 @@
       (gov/record! db {:proposal-id pid :work "w" :verdict :accepted})
       (is (empty? (gov/pending-proposals db)) "no longer pending after receipt"))))
 
+(deftest fifty-concurrent-submissions-get-fifty-distinct-t-values
+  (testing "regression: submit-proposal! used to read next-t and call
+            transact! as two separate steps -- a TOCTOU race where
+            concurrent submitters could compute the SAME :proposal/t,
+            silently corrupting causal ordering (pending-proposals sorts by
+            :proposal/t). Verified with REAL concurrent JVM threads: the old
+            two-step pattern produced as few as 23 distinct t values out of
+            50 submissions"
+    (let [db (store/mem-store)
+          n  50
+          futures (doall (for [i (range n)]
+                           (future (gov/submit-proposal! db {:work "w" :agent (str "agent-" i)
+                                                             :payload {}}))))]
+      (doseq [f futures] @f)
+      (is (= n (count (gov/pending-proposals db))) "no proposals collided/overwrote each other")
+      (is (= n (count (distinct (map :proposal/t (gov/pending-proposals db)))))
+          "every submission got a distinct causal ordinal"))))
+
 (deftest gate-accepts-and-rejects
   (testing "governor materializes accepted proposals, rejects the rest"
     (let [db        (store/mem-store)

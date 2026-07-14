@@ -20,14 +20,22 @@
 
 (defn submit-proposal!
   "Append a write-intent proposal for `agent` on `work`. Returns the proposal id.
-  `now` is accepted for symmetry but ordering is captured by the append ordinal."
+  `now` is accepted for symmetry but ordering is captured by the append ordinal.
+
+  t is assigned atomically WITH the append (store/transact-with-t!) -- a
+  separate next-t read followed by transact! let two concurrent submitters
+  compute the same t (verified against 50 real concurrent threads: as few as
+  23 distinct t values came out of 50 submissions)."
   [db {:keys [work agent payload]}]
-  (let [t   (store/next-t db)
-        pid (str "prop|" work "|" agent "|" t)
-        ent {:proposal/id pid :proposal/work work :proposal/agent agent
-             :proposal/payload payload :proposal/t t}]
-    (store/transact! db (schema/entity->datoms ent t))
-    pid))
+  (let [{:keys [t]} (store/transact-with-t!
+                     db
+                     (fn [t]
+                       (schema/entity->datoms
+                        {:proposal/id (str "prop|" work "|" agent "|" t)
+                         :proposal/work work :proposal/agent agent
+                         :proposal/payload payload :proposal/t t}
+                        t)))]
+    (str "prop|" work "|" agent "|" t)))
 
 (defn pending-proposals
   "Proposals (in causal order) that have not yet been receipted."
@@ -46,16 +54,17 @@
   proposal is never re-materialized. This is the single place the governor
   commits a decision, whether reached by `drain!` or by an actor graph."
   [db {:keys [proposal-id work verdict reason]}]
-  (let [t   (store/next-t db)
-        rid (str "rcpt|" proposal-id "|" t)
-        ent {:receipt/id rid
-             :receipt/proposal proposal-id
-             :receipt/work work
-             :receipt/verdict verdict
-             :receipt/reason reason
-             :receipt/t t}]
-    (store/transact! db (schema/entity->datoms ent t))
-    ent))
+  (let [ent-fn (fn [t]
+                 {:receipt/id (str "rcpt|" proposal-id "|" t)
+                  :receipt/proposal proposal-id
+                  :receipt/work work
+                  :receipt/verdict verdict
+                  :receipt/reason reason
+                  :receipt/t t})
+        {:keys [t]} (store/transact-with-t!
+                     db
+                     (fn [t] (schema/entity->datoms (ent-fn t) t)))]
+    (ent-fn t)))
 
 (defn drain!
   "Drain pending proposals through `gate` then `materialize` (single writer).

@@ -13,6 +13,25 @@
       (is (= "A" (:holder b)) "B observes A as holder")
       (is (= "A" (lease/holder db "w1" 200)) "holder is deterministic"))))
 
+(deftest fifty-agents-really-concurrent-exactly-one-winner
+  (testing "regression: claim! used to read next-t and call transact! as two
+            separate steps -- a TOCTOU race where two concurrent callers
+            could compute the SAME t, breaking the whole 'earliest active
+            claim (smallest t) wins' guarantee (both could observe
+            themselves as the winner). Verified with REAL concurrent JVM
+            threads, not a sequential simulation: 50 agents racing for the
+            same work-unit must produce exactly one :ok true, and every
+            agent (winner and losers alike) must agree on who that is"
+    (let [db (store/mem-store)
+          n  50
+          results (doall (for [i (range n)]
+                           (future (lease/claim! db {:work "w" :agent (str "agent-" i)
+                                                     :ttl-ms 100000 :now 0}))))
+          outcomes (mapv deref results)]
+      (is (= 1 (count (filter :ok outcomes))) "exactly one winner")
+      (is (= 1 (count (distinct (map :holder outcomes))))
+          "every agent, winner and losers alike, agrees on the same holder"))))
+
 (deftest deterministic-across-observers
   (testing "holder is the earliest active claim regardless of query time"
     (let [db (store/mem-store)]
