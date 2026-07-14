@@ -22,7 +22,7 @@
   ;; off the zero-dep :test path so the core lib stays dependency-free.
   :kotoba {:extra-paths ["test-kotoba"]
            :extra-deps {io.github.com-junkawasaki/langchain-clj
-                        {:local/root "../../com-junkawasaki/langchain-clj"}
+                        {:local/root "../../kotoba-lang/langchain"}
                         io.github.cognitect-labs/test-runner
                         {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
            :main-opts ["-m" "cognitect.test-runner" "-d" "test-kotoba"]}}}
