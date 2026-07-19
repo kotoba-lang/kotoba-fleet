@@ -1,0 +1,15 @@
+{:migration/id :kotoba-fleet/bounded-lease-holder-v1
+ :status :candidate
+ :source-of-truth {:legacy "src/kotoba/fleet/lease.cljc"
+                   :kernel "src/kotoba/fleet/bounded_lease.kotoba"}
+ :domain {:work-units :one-preselected-by-host
+          :maximum-claims 4 :agent-id :positive-i64 :ordinal :unique-nonnegative-i64
+          :time :nonnegative-i64 :released-flag :binary
+          :invalid-policy :fail-closed
+          :overflow-policy :elapsed-subtraction-after-order-validation}
+ :excluded [:datom-reconstruction :work-filtering :string-identifiers
+            :claim-append :atomic-ordinal-allocation :release-append :storage]
+ :evidence {:cljc-oracle "test/kotoba/fleet/bounded_lease_matrix_test.clj"
+            :kotoba-conformance "test/kotoba/fleet/bounded_lease_conformance.kotoba"
+            :web-wasm-verifier "scripts/verify-kotoba-bounded-lease.mjs"
+            :cases-per-target 19}}

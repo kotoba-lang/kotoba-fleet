@@ -16,6 +16,13 @@ makes conflict *structurally impossible* with three primitives:
 | **governor-drain** | `kotoba.fleet.governor` | agents only *append* `:proposal/*` datoms; a single per-repo governor gates them and materializes accepted ones to git, appending a `:receipt/*`. → git never sees N concurrent writers (the actor invariant). |
 | **fleet-view** | `kotoba.fleet.view` | aggregate live leases / TTL / progress across the fleet into one view. |
 
+The holder decision also has a native, capability-free `.kotoba` profile for
+up to four claims on one host-selected work unit. It validates the complete
+encoding before selecting the earliest active causal ordinal, rejects duplicate
+ordinals and future/negative timestamps, and computes expiry without signed-i64
+addition overflow. Datom reconstruction, string/work filtering, atomic ordinal
+allocation, append operations, and storage remain host-owned CLJC concerns.
+
 Everything is **append-only datoms** on an injected `:db-api` (set-union merge,
 monotonic, deterministic). The same record runs on the in-memory `MemStore`
 here, or on `langchain.db` / `kotoba-db` (kotobase.net XRPC) in production —

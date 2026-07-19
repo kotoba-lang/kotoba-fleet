@@ -46,3 +46,17 @@ jobs:
 
       - name: Lint (clj-kondo)
         run: clojure -M:lint
+
+      - name: Compile Kotoba bounded lease holder
+        run: |
+          mkdir -p target/kotoba
+          clojure -M:kotoba-compiler compile test/kotoba/fleet/bounded_lease_conformance.kotoba \
+            --source-path src --target js-browser --output target/kotoba/lease.mjs
+          clojure -M:kotoba-compiler compile test/kotoba/fleet/bounded_lease_conformance.kotoba \
+            --source-path src --target wasm32-browser --output target/kotoba/lease.wasm
+
+      - name: Execute bounded lease Web and Wasm cases
+        run: |
+          compiler_src="$(clojure -Spath -M:kotoba-compiler | tr ':' '\n' | grep '/compiler/' | head -1)"
+          node scripts/verify-kotoba-bounded-lease.mjs target/kotoba/lease.mjs \
+            target/kotoba/lease.wasm "$(dirname "$compiler_src")/runtime/browser-host.mjs"
