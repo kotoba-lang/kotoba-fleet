@@ -23,6 +23,8 @@
             [fleet.gate :as gate]
             [fleet.identity :as fid]
             [fleet.kotobase-store :as kbs]
+            [fleet.node :as fnode]
+            [fleet.receipt :as receipt]
             [kotoba.fleet.agent :as agent]
             [kotoba.fleet.governor :as gov]
             [kotoba.fleet.lease :as lease]
@@ -173,7 +175,53 @@
        (not= (kbs/canonical-graph "did:key:z6MkhnmvngYxx3h13RsVyizeSXwDp54kkWfc87w8yVuLffBa" "fleet-log")
              (kbs/canonical-graph "did:key:z6MkhKgm9LbcxSN5uVDBJAhZ3B7s31MHXfS2omgkmCnWu3Ve" "fleet-log")))
 
-(println "\n8. sandbox path confinement")
+(println "\n8. signed receipts, sign-off and node eligibility")
+(let [pem (path/join tmp "receipt.pem")
+      _ (fs/writeFileSync pem (.-privateKey (crypto/generateKeyPairSync
+                                             "ed25519" #js {:privateKeyEncoding #js {:format "pem" :type "pkcs8"}
+                                                            :publicKeyEncoding #js {:format "der" :type "spki"}})))
+      me (fid/resolve-identity (str "pem:" pem))
+      b (receipt/body {:receipt {:receipt/work "u" :receipt/proposal "p1" :receipt/verdict :accepted}
+                       :payload {:repo "o/r" :pin "abc" :diff "d" :exec-backing :sandbox-exec
+                                 :tests {:final-exit 0} :source-auth :none}
+                       :work-id "w1" :node "n1" :at "2026-07-25T00:00:00Z"})
+      signed (receipt/sign me b)]
+  (check "a signed receipt verifies" (receipt/verify signed))
+  (check "a receipt with an edited body does not verify"
+         (not (receipt/verify (assoc-in signed [:receipt :fleet.sandbox/verdict] :rejected))))
+  (check "a receipt with a swapped cid does not verify"
+         (not (receipt/verify (assoc signed :cid (fid/sha256-hex "other")))))
+  (check "the ledger round-trips a signed receipt"
+         (= [signed] (receipt/read-ledger (str (pr-str signed) "\n"))))
+
+  (check "a patch touching a sign-off path is held"
+         (receipt/needs-signoff? ["test/a_test.cljc" "src/a.cljc"] ["test/"]))
+  (check "a patch outside sign-off paths is not held"
+         (not (receipt/needs-signoff? ["src/a.cljc"] ["test/"])))
+  (let [ds (receipt/approval-datoms me "p1" 0)]
+    (check "a valid approval from an enrolled DID counts"
+           (receipt/approved? ds "p1" [(:did me)]))
+    (check "an approval from an unenrolled DID does not count"
+           (not (receipt/approved? ds "p1" ["did:key:z6MkOTHER"])))
+    (check "an approval cannot be moved to another proposal"
+           (not (receipt/approved? (mapv (fn [[e a v t]]
+                                           (if (= a :approval/proposal) [e a "p2" t] [e a v t])) ds)
+                                   "p2" [(:did me)])))))
+
+(let [caps [{:node "down" :up false}
+            {:node "leaky" :up true :caps #{:nbb :git} :contains-exec false}
+            {:node "good" :up true :caps #{:nbb :git} :contains-exec true}
+            {:node "jvm" :up true :caps #{:nbb :git :jdk} :contains-exec true}]]
+  (check "an unreachable node is not chosen"
+         (not= "down" (:node (fnode/choose caps {:requires #{:nbb}}))))
+  (check "a node whose exec backing leaks is not chosen"
+         (= "good" (:node (fnode/choose caps {:requires #{:nbb}}))))
+  (check "a capability requirement narrows the choice"
+         (= "jvm" (:node (fnode/choose caps {:requires #{:jdk}}))))
+  (check "no eligible node explains itself"
+         (str/includes? (:why (fnode/choose caps {:requires #{:cuda}})) "no node satisfies")))
+
+(println "\n9. sandbox path confinement")
 (let [out (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
                            #js {:encoding "utf8"})]
   (print out)
