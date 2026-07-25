@@ -12,7 +12,7 @@ makes conflict *structurally impossible* with three primitives:
 | primitive | ns | what it gives |
 |---|---|---|
 | **lease** | `kotoba.fleet.lease` | optimistic, lock-server-free mutual exclusion over work-units. Claim = append a `:lease/*` datom; the holder is the **deterministic earliest active claim** (CRDT-style). TTL + crash re-lease. |
-| **agent loop** | `kotoba.fleet.agent` | the agent side: pull open work → optimistically lease → run the injected `run` fn (a **kotoba-code** session in prod) → submit a `:proposal/*`. Loses the race → backs off. This is the kotoba-code integration seam. |
+| **agent loop** | `kotoba.fleet.agent` | the agent side: pull open work → optimistically lease → run the injected `run` fn (in prod: the **nbb sandbox agent** on a fleet node) → submit a `:proposal/*`. Loses the race → backs off. This is the coding-agent integration seam. |
 | **governor-drain** | `kotoba.fleet.governor` | agents only *append* `:proposal/*` datoms; a single per-repo governor gates them and materializes accepted ones to git, appending a `:receipt/*`. → git never sees N concurrent writers (the actor invariant). |
 | **fleet-view** | `kotoba.fleet.view` | aggregate live leases / TTL / progress across the fleet into one view. |
 
@@ -224,6 +224,25 @@ Every governor decision is signed with that key and the signature lands both in
 the log and in `receipts/<work>.edn`, so a receipt is checkable against the
 enrolled DID rather than trusted because of where it was found.
 
+### Which agent runtime is canonical
+
+**nbb** (owner decision, 2026-07-25). The production `run` is
+`hosts/nbb/fleet/sandbox_agent.cljs` on a fleet node — not the JVM
+`kotoba-code` session the seam originally named. This is also the runtime this
+repo prefers: the priority chain is kotoba wasm → clojurewasm → ClojureScript →
+nbb, with the JVM demoted to a last resort.
+
+`kotoba-code` is not retired and not rewritten: it remains a JVM-side
+implementation of the same durable-loop design (ADR-2606280001), useful where a
+JVM toolchain is already the point. It is simply no longer what the fleet runs.
+
+What the nbb agent still does NOT carry over from that design: a session is one
+bounded run with no checkpoint, so a sandbox that dies mid-session is redone
+from the top rather than resumed. The lease makes that safe (the unit is picked
+up again after the TTL) but not cheap. Porting tick-level checkpointing is the
+open item — naming the canonical runtime is what makes it worth doing once
+instead of twice.
+
 ### Execution isolation
 
 Confining the file tools is not enough on its own: the agent writes the code
@@ -283,4 +302,4 @@ on JVM, ClojureScript, and the kotoba-clj WASM pod alike.
 
 F0 scaffold (ADR-2606302000 maturity F0–F1): datom schema + the three loops +
 contract tests on `MemStore`. Follow-ups: bind to `kotoba-db` XRPC, integrate
-`kotoba-code` as the per-agent runtime, and a `murakumo` fleet-view extension.
+the nbb sandbox agent as the per-agent runtime, and a `murakumo` fleet-view extension.
