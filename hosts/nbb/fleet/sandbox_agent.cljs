@@ -56,10 +56,16 @@
 (def test-cmd  (:test-cmd spec))
 (def endpoint  (:endpoint spec))
 (def model     (:model spec))
-(def budget    (merge {:max-turns 10 :max-tool-calls 30 :max-tokens 1600
+(def budget    (merge {:max-turns 10 :max-tool-calls 30 :max-tokens 1200
                        :deadline-ms 900000 :test-timeout-ms 300000
                        :max-file-bytes 60000 :max-patch-bytes 400000
-                       :max-write-bytes 4000 :max-model-errors 2}
+                       :max-write-bytes 4000 :max-model-errors 2
+                       ;; The serving endpoint counts prompt + generation against ONE
+                       ;; window (measured: n_ctx 8192 on murakumo-main today), so a
+                       ;; generous :max-tokens silently halves the room to think in.
+                       ;; :ctx-tokens is that window; the loop keeps the prompt under
+                       ;; what is left after :max-tokens.
+                       :ctx-tokens 8192 :history-floor 2}
                       (:budget spec)))
 (def deadline (+ (js/Date.now) (:deadline-ms budget)))
 
@@ -361,7 +367,41 @@
        "not keep editing after green.\n"
        "- Keep reasoning short."))
 
+(defn- est-tokens
+  "Cheap token estimate (~4 chars each). Exact counting would need the server's
+  tokenizer; this only has to be conservative enough to trim BEFORE the request
+  is refused."
+  [messages]
+  (quot (count (js/JSON.stringify messages)) 4))
+
+(defn- trim-history!
+  "Elide the oldest tool outputs until the prompt fits.
+
+  Tool results are the bulk of a coding session's context and the oldest ones
+  are the least useful — the agent has already acted on them. The system
+  prompt, the task, and the last `:history-floor` turns are never touched, and
+  an elision is announced in place rather than silently dropped so the model
+  does not think it read something it can no longer see.
+
+  Measured: at 8192 tokens this failure mode accounted for 5 of 7 benchmark
+  failures — every L3 attempt died on it before the model had shown whether it
+  could do the task at all."
+  [messages]
+  (let [budget-tokens (- (:ctx-tokens budget) (:max-tokens budget) 256)
+        floor (:history-floor budget)]
+    (loop [i 1]
+      (when (and (> (est-tokens messages) budget-tokens)
+                 (< i (- (.-length messages) (* 2 floor))))
+        (let [m (aget messages i)]
+          (when (and (= "tool" (.-role m))
+                     (not (str/starts-with? (str (.-content m)) "[elided")))
+            (set! (.-content m) (str "[elided " (count (str (.-content m)))
+                                     " bytes of an earlier tool result — re-read the file if you need it]")))
+          (recur (inc i)))))
+    messages))
+
 (defn- chat! [messages]
+  (trim-history! messages)
   (let [body-file (path/join root "req.json")
         _ (fs/writeFileSync body-file
                             (js/JSON.stringify
@@ -397,13 +437,22 @@
                          (if (< @model-errors (:max-model-errors budget))
                            (do (swap! model-errors inc)
                                (log "  model error, recovering:" (.-message e))
+                               (when (str/includes? (str (.-message e)) "exceed_context_size")
+                                 ;; not a prompting problem: the window is full.
+                                 ;; Free the oldest results outright and try again.
+                                 (doseq [i (range 1 (max 1 (- (.-length messages) 4)))]
+                                   (let [m (aget messages i)]
+                                     (when (= "tool" (.-role m))
+                                       (set! (.-content m) "[elided to fit the context window]")))))
                                (.push messages
                                       #js {:role "user"
                                            :content (str "Your last request failed at the "
                                                          "server: " (subs (str (.-message e)) 0 300)
-                                                         ". This usually means a tool-call "
-                                                         "argument was too large. Retry with "
-                                                         "edit_file and a short anchor.")})
+                                                         ". If it mentions the context size, keep "
+                                                         "your next messages short and do not re-read "
+                                                         "files you already read; otherwise a tool-call "
+                                                         "argument was too large — retry with edit_file "
+                                                         "and a short anchor.")})
                                ::recovered)
                            (throw e))))]
           (if (= ::recovered msg)
