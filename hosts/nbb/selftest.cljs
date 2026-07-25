@@ -16,10 +16,13 @@
             ["node:os" :as os]
             ["node:path" :as path]
             ["node:child_process" :as cp]
+            ["node:crypto" :as crypto]
             [clojure.string :as str]
             [cljs.reader :as reader]
             [fleet.filestore :as filestore]
             [fleet.gate :as gate]
+            [fleet.identity :as fid]
+            [fleet.kotobase-store :as kbs]
             [kotoba.fleet.agent :as agent]
             [kotoba.fleet.governor :as gov]
             [kotoba.fleet.lease :as lease]
@@ -61,8 +64,12 @@
 (println "\n2. cross-PROCESS lease race (8 concurrent nbb processes, one unit)")
 (let [log (path/join tmp "race.edn")
       _ (filestore/file-store log)
+      ;; children must load the SAME classpath as this process — the host now
+      ;; pulls in the cacao / ed25519 / langchain libs, and a child that cannot
+      ;; load them just dies silently and looks like a lost race
+      cp-arg (or (second (drop-while #(not= "--classpath" %) argv)) "src:hosts/nbb")
       cmd (str "for i in 1 2 3 4 5 6 7 8; do "
-               "nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljs "
+               "nbb --classpath '" cp-arg "' hosts/nbb/selftest.cljs "
                "--claim-child agent-$i --log " log " & done; wait")
       out (cp/execFileSync "sh" #js ["-c" cmd] #js {:encoding "utf8" :maxBuffer 8388608})
       results (->> (str/split-lines out) (remove str/blank?) (mapv reader/read-string))
@@ -132,7 +139,41 @@
          (empty? (:leaked probe))
          (str "blocked=" (pr-str (:blocked probe)) " leaked=" (pr-str (:leaked probe)))))
 
-(println "\n6. sandbox path confinement")
+(println "\n6. fleet agent identity + signed receipts (throwaway PEM, not the kagi key)")
+(let [pem-path (path/join tmp "agent.pem")
+      kp (crypto/generateKeyPairSync
+          "ed25519" #js {:privateKeyEncoding #js {:format "pem" :type "pkcs8"}
+                         :publicKeyEncoding #js {:format "der" :type "spki"}})
+      _ (fs/writeFileSync pem-path (.-privateKey kp))
+      me (fid/resolve-identity (str "pem:" pem-path))
+      body (pr-str {:receipt/id "r1" :receipt/verdict :accepted})
+      cid (fid/sha256-hex body)
+      sig (fid/sign-hex me cid)]
+  (check "DID is derived from the key, not configured"
+         (str/starts-with? (:did me) "did:key:z6Mk") (:did me))
+  (check "a receipt signature verifies against the DID alone"
+         (fid/verify-hex (:did me) cid sig))
+  (check "a tampered receipt is rejected"
+         (not (fid/verify-hex (:did me) (fid/sha256-hex (str body "!")) sig)))
+  (check "another key cannot pass as this signer"
+         (let [other (do (fs/writeFileSync (path/join tmp "other.pem")
+                                           (.-privateKey (crypto/generateKeyPairSync
+                                                          "ed25519" #js {:privateKeyEncoding #js {:format "pem" :type "pkcs8"}
+                                                                         :publicKeyEncoding #js {:format "der" :type "spki"}})))
+                         (fid/resolve-identity (str "pem:" (path/join tmp "other.pem"))))]
+           (not (fid/verify-hex (:did me) cid (fid/sign-hex other cid))))))
+
+(println "\n7. kotobase graph identity (offline)")
+(check "canonical-graph matches the edge's derivation (golden vector)"
+       (= "bafyreihzrcxrk34ffo56uetcw7lyioslfulczqh5zpqwy5vok54vkwdfwm"
+          (kbs/canonical-graph "did:key:z6MkhnmvngYxx3h13RsVyizeSXwDp54kkWfc87w8yVuLffBa"
+                               "fleet-log"))
+       (kbs/canonical-graph "did:key:z6MkhnmvngYxx3h13RsVyizeSXwDp54kkWfc87w8yVuLffBa" "fleet-log"))
+(check "a different DID gets a different graph (tenant isolation is structural)"
+       (not= (kbs/canonical-graph "did:key:z6MkhnmvngYxx3h13RsVyizeSXwDp54kkWfc87w8yVuLffBa" "fleet-log")
+             (kbs/canonical-graph "did:key:z6MkhKgm9LbcxSN5uVDBJAhZ3B7s31MHXfS2omgkmCnWu3Ve" "fleet-log")))
+
+(println "\n8. sandbox path confinement")
 (let [out (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
                            #js {:encoding "utf8"})]
   (print out)

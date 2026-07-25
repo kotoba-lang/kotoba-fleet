@@ -35,6 +35,8 @@
             [cljs.reader :as reader]
             [fleet.filestore :as filestore]
             [fleet.gate :as gate]
+            [fleet.identity :as fid]
+            [fleet.kotobase-store :as kbs]
             [kotoba.fleet.store :as store]
             [kotoba.fleet.agent :as agent]
             [kotoba.fleet.governor :as gov]
@@ -57,6 +59,12 @@
 (def node (opt "--node" (:node spec)))
 (def materialize-mode (keyword (opt "--materialize" "dry-run")))
 (def mock? (flag? "--mock"))
+(def store-kind (keyword (opt "--store" "file")))
+(def identity-spec (opt "--identity" "kagi:fleet-agent-sandbox-dispatch"))
+(def db-name (opt "--db-name" (get spec :db-name "fleet-log")))
+;; A remote log's ordinal allocation is not atomic (no CAS in the :db-api
+;; contract), so a winner must be re-confirmed after the log settles.
+(def settle-ms (js/parseInt (opt "--settle-ms" "1500")))
 
 (def unit (:unit spec))
 (def repo (:repo spec))
@@ -96,11 +104,25 @@
 ;; ---------------------------------------------------------------------------
 ;; pinned source
 
-(defn fetch-tarball! [dest]
-  (let [buf (cp/execFileSync "gh" #js ["api" (str "repos/" repo "/tarball/" pin)]
-                             #js {:maxBuffer (* 512 1024 1024)})]
-    (fs/writeFileSync dest buf)
-    {:bytes (.-length buf) :path dest}))
+(def source-token
+  "Explicit, opt-in credential for a private source repo. Deliberately NOT the
+  operator's ambient `gh` login: the dispatcher used to shell out to `gh api`,
+  which meant every run carried whatever scopes that account happens to hold.
+  A public repo needs no credential at all, so the default is none."
+  (some-> (.-FLEET_SOURCE_TOKEN js/process.env) str/trim not-empty))
+
+(def source-auth (if source-token :token :none))
+
+(defn fetch-tarball!
+  "The pinned commit as a tarball, straight from codeload over HTTPS."
+  [dest]
+  (let [url (str "https://codeload.github.com/" repo "/tar.gz/" pin)
+        args (cond-> ["-sS" "--fail" "--location" "--max-time" "300" "-o" dest url]
+               source-token (concat ["-H" (str "authorization: Bearer " source-token)]))]
+    (sh "curl" (vec args))
+    (when-not (fs/existsSync dest)
+      (throw (ex-info (str "could not fetch " repo "@" pin) {})))
+    {:bytes (.-size (fs/statSync dest)) :path dest}))
 
 (defn extract-pinned! [tarball dest]
   (sh "rm" ["-rf" dest])
@@ -163,6 +185,7 @@
                     " in " (quot (- (now) started) 1000) "s"))
       (when-not (str/blank? (:diff result))
         (assoc result :pin pin :repo repo :node node :agent agent-name
+               :source-auth source-auth
                :wall-ms (- (now) started))))))
 
 (defn run-mock!
@@ -229,10 +252,48 @@
 ;; ---------------------------------------------------------------------------
 ;; main
 
+(defn open-store!
+  "The coordination log. `file` is one machine; `kotobase` is the fleet's own
+  tenant graph on kotobase.net, reachable from every machine that holds the
+  fleet agent key."
+  [me]
+  (case store-kind
+    :file (do (println (str "  store: file " log-path))
+              (filestore/file-store (path/resolve log-path)))
+    :kotobase (let [db (kbs/kotobase-store {:identity me :db-name db-name})]
+                (println (str "  store: kotobase.net db=" db-name
+                              "\n         graph=" (:fleet/graph db)
+                              "\n         did=" (:fleet/did db)))
+                db)
+    (throw (ex-info (str "unknown --store " store-kind) {}))))
+
+(defn sign-receipts!
+  "Sign each governor decision with the fleet agent key and append it to the
+  log. A receipt is then checkable against the DID enrolled in
+  manifest/fleet-agents.edn instead of being believed because of where it was
+  found — the same containment the murakumo CI signer has: this key can add to
+  an append-only log and nothing else."
+  [db me receipts]
+  (mapv (fn [r]
+          (let [body (pr-str r)
+                cid (fid/sha256-hex body)
+                sig (fid/sign-hex me cid)]
+            (store/transact-with-t!
+             db (fn [t]
+                  [[(str "sig|" (:receipt/id r)) :sigreceipt/receipt (:receipt/id r) t]
+                   [(str "sig|" (:receipt/id r)) :sigreceipt/cid cid t]
+                   [(str "sig|" (:receipt/id r)) :sigreceipt/signature sig t]
+                   [(str "sig|" (:receipt/id r)) :sigreceipt/signer (:did me) t]
+                   [(str "sig|" (:receipt/id r)) :sigreceipt/t t t]]))
+            {:receipt r :cid cid :signature sig :signer (:did me)}))
+        receipts))
+
 (defn -main []
   (fs/mkdirSync state-dir #js {:recursive true})
-  (let [db (filestore/file-store (path/resolve log-path))]
-    (println (str "unit=" unit " agent=" agent-name " log=" log-path))
+  (let [me (fid/resolve-identity identity-spec)
+        db (open-store! me)]
+    (println (str "unit=" unit " agent=" agent-name " signer=" (:did me)
+                  " source-auth=" (name source-auth)))
     (when-not (some #(and (= :work/unit (second %)) (= unit (nth % 2))) (store/datoms db))
       (agent/enqueue! db {:unit unit :created-by agent-name})
       (println "  enqueued work-unit"))
@@ -249,10 +310,17 @@
                        ;; timeout is not a crashed agent holding real work.
                        :run (fn [_]
                               (try
-                                (if mock?
-                                  (let [m (run-mock!)]
-                                    (when-not (str/blank? (:diff m)) m))
-                                  (run-on-node! tarball))
+                                ;; On a shared remote log the claim is
+                                ;; optimistic: re-read after it settles and back
+                                ;; off if another dispatcher won, BEFORE burning
+                                ;; a sandbox run on work that cannot land.
+                                (if-not (kbs/confirmed-holder? db unit agent-name
+                                                               (if (= :file store-kind) 0 settle-ms))
+                                  (do (println "  claim lost after settle — backing off") nil)
+                                  (if mock?
+                                    (let [m (run-mock!)]
+                                      (when-not (str/blank? (:diff m)) m))
+                                    (run-on-node! tarball)))
                                 (catch :default e
                                   (println (str "  run FAILED: " (.-message e)))
                                   nil)))})]
@@ -265,9 +333,11 @@
           (agent/complete! db {:unit unit :agent agent-name :now (now)})
           (when (some #{:accepted} verdicts) (agent/close-work! db unit))
           (fs/mkdirSync (path/join state-dir "receipts") #js {:recursive true})
-          (fs/writeFileSync (path/join state-dir "receipts" (str (:work-id spec) ".edn"))
-                            (str/join "\n" (map pr-str receipts)))
-          (println (str "  receipts: " (str/join ", " (map name verdicts))))))
+          (let [signed (sign-receipts! db me receipts)]
+            (fs/writeFileSync (path/join state-dir "receipts" (str (:work-id spec) ".edn"))
+                              (str/join "\n" (map pr-str signed)))
+            (println (str "  receipts: " (str/join ", " (map name verdicts))
+                          " (signed by " (:did me) ")")))))
       (println "\nfleet view:")
       (println (pr-str (view/snapshot db (now)))))))
 

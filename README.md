@@ -93,7 +93,59 @@ lease (kotoba.fleet.lease)
 | sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: ephemeral workdir from a pinned tarball, path-confined tools, one allowlisted test command under an OS-level exec backing, enforced budgets, emits a patch |
 | admission rules | `hosts/nbb/fleet/gate.cljs` | pure governor rules — lease holder, protected paths, green tests, **exec backing** |
 | dispatcher | `bin/fleet-sandbox-dispatch.cljs` | lease → remote run → proposal → gate → materialize → receipt |
-| host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; gate admission matrix; exec-backing containment; path confinement |
+| shared log | `hosts/nbb/fleet/kotobase_store.cljs` | the same `:db-api` on kotobase.net, so the log is shared across MACHINES |
+| agent identity | `hosts/nbb/fleet/identity.cljs` | the dispatcher's own narrow key (kagi) — CACAO auth + signed receipts |
+| observer | `bin/fleet-observe.cljs` | read the fleet log from any machine, with no fleet key |
+| host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; gate admission matrix; exec-backing containment; identity + receipt signatures; graph derivation; path confinement |
+
+### Where the log lives
+
+```bash
+# one machine
+… bin/fleet-sandbox-dispatch.cljs --work w.edn --store file --log .fleet/log.edn
+# the fleet (shared across machines)
+… bin/fleet-sandbox-dispatch.cljs --work w.edn --store kotobase --db-name fleet-log
+# watch it from anywhere, holding no fleet key
+nbb --classpath … bin/fleet-observe.cljs --db-name fleet-log --graph <cid> --unit <unit>
+```
+
+`--store kotobase` puts the append-only log on kotobase.net's tenant Datom
+plane. Auth is a **self-minted CACAO**: the key IS the authority for the graph
+its own DID derives, so a dispatcher is granted nothing by anyone and can reach
+nothing but its own fleet graph. Writers therefore share one fleet agent key
+(as the murakumo CI signer does); an observer needs only the graph CID and any
+identity — enough to read the log and compute the same holder, never enough to
+forge a claim.
+
+Measured across two machines: the Mac claimed a unit through kotobase.net and
+`naphtali`, holding no fleet key, read the same 34-datom log and computed the
+same holder.
+
+Two properties of the live edge shaped this and are worth knowing before
+extending it: a CACAO is **single-use** (nonce replay is recorded), so every
+request mints its own; and the edge's query engine did **not** apply the join
+in the four-attribute datom reification (a two-lease log came back as 240
+cross-product rows), so a fleet datom is stored as ONE entity with ONE
+`pr-str`'d tuple. The remote backend also has no compare-and-swap, so ordinals
+can collide; the deterministic `[t id]` tiebreak still converges on one holder
+and the dispatcher re-confirms after a settle delay before doing any work.
+
+### Credentials
+
+The dispatcher runs on its own **narrow** identity (`--identity kagi:<item>`,
+default `kagi:fleet-agent-sandbox-dispatch`, enrolled in
+`manifest/fleet-agents.edn` with grant `fleet-sandbox/*`). It cannot advance a
+pin, pass governance quorum, or sign for another agent — a stolen copy can at
+most add noise to an append-only log.
+
+Source is fetched from codeload over HTTPS with **no credential** for a public
+repo; a private one needs an explicit `FLEET_SOURCE_TOKEN`. Nothing inherits
+the operator's ambient `gh` login any more, and which credential class was used
+is recorded on the payload.
+
+Every governor decision is signed with that key and the signature lands both in
+the log and in `receipts/<work>.edn`, so a receipt is checkable against the
+enrolled DID rather than trusted because of where it was found.
 
 ### Execution isolation
 
