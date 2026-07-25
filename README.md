@@ -68,11 +68,50 @@ Datom log. `clojure -M:kotoba` runs the MemStore ≡ backend parity test.
                 :now 1004})
 ```
 
+## Running an agent on the fleet (`hosts/nbb`, PoC)
+
+The library's `run` seam is where a coding-agent session plugs in. `hosts/nbb`
+injects a **sandboxed session on a murakumo fleet node** instead of a terminal
+on the operator's laptop — ADR-2606302000's F3/F4 stages:
+
+```bash
+nbb --classpath src:hosts/nbb bin/fleet-sandbox-dispatch.cljs \
+    --work examples/work-kotoba-delta.edn --agent a1 --log .fleet/log.edn
+```
+
+```
+lease (kotoba.fleet.lease)
+  └─ run = pinned tarball from the GitHub API → scp → ssh node
+           → hosts/nbb/fleet/sandbox_agent.cljs (ReAct loop vs murakumo-main)
+       └─ proposal (kotoba.fleet.governor/submit-proposal!)
+            └─ gate → materialize (single writer) → receipt
+```
+
+| piece | file | role |
+|---|---|---|
+| file-backed `:db-api` | `hosts/nbb/fleet/filestore.cljs` | the same append-only contract as `MemStore`, but shared by separate OS processes (ordinal assigned under a lock — the file analogue of `swap!`) |
+| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: ephemeral workdir from a pinned tarball, path-confined tools, one allowlisted test command, enforced budgets, emits a patch |
+| dispatcher | `bin/fleet-sandbox-dispatch.cljs` | lease → remote run → proposal → gate → materialize → receipt |
+| host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; path-confinement matrix |
+
+What the shape guarantees, independent of how the model behaves: the node gets
+an exact pinned commit (never the operator's drifting checkout); the agent
+returns a **patch** and holds no credential and no remote, so it cannot commit,
+push, or move a pin; the governor re-runs its own checks (lease holder, protected
+paths, patch applies to the pinned tree, tests actually green) rather than
+trusting the agent's report; and losing the lease race is a backoff, so several
+dispatchers can point at one log without a lock server.
+
+Not yet: OS-level isolation is a fleet node + ephemeral dir + path confinement,
+not a container or microVM, and `--materialize dry-run` lands the patch as a
+local commit for inspection — nothing is pushed.
+
 ## Build
 
 ```bash
 clojure -M:lint          # clj-kondo (errors fail)
 clojure -M:test          # cognitect test-runner — contract tests
+nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljs   # nbb host invariants
 ```
 
 `.cljc` keeps `edn`/`Exception` `#?(:clj …/:cljs …)`-conditional so the core runs

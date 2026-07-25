@@ -4,3 +4,7 @@
 /target/
 *.class
 .DS_Store
+
+# fleet host state (append-only log, receipts, scratch materialize trees)
+.fleet/
+.fleet-run.log
