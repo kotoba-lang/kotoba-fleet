@@ -23,6 +23,7 @@
             [fleet.gate :as gate]
             [fleet.identity :as fid]
             [fleet.kotobase-store :as kbs]
+            [fleet.eval :as ev]
             [fleet.node :as fnode]
             [fleet.receipt :as receipt]
             [kotoba.fleet.agent :as agent]
@@ -221,7 +222,31 @@
   (check "no eligible node explains itself"
          (str/includes? (:why (fnode/choose caps {:requires #{:cuda}})) "no node satisfies")))
 
-(println "\n9. sandbox path confinement")
+(println "\n9. the benchmark checker cannot be talked into a pass")
+(let [expect {:files-subset-of ["src/a.cljc" "test/a_test.cljc"]
+              :must-touch ["src/a.cljc" "test/a_test.cljc"] :max-files 2
+              :must-add ["defn wanted" "deftest"]}
+      good (str "diff --git a/src/a.cljc b/src/a.cljc\n+(defn wanted [x] x)\n"
+                "diff --git a/test/a_test.cljc b/test/a_test.cljc\n+(deftest t)\n")]
+  (check "a patch that does the task passes" (:meets-spec (ev/check good expect)))
+  (check "a patch that only claims it in a DELETED line fails"
+         (not (:meets-spec (ev/check (str "diff --git a/src/a.cljc b/src/a.cljc\n-(defn wanted [x] x)\n"
+                                          "diff --git a/test/a_test.cljc b/test/a_test.cljc\n+(deftest t)\n")
+                                     expect))))
+  (check "a patch that skips a required file fails"
+         (not (:meets-spec (ev/check "diff --git a/src/a.cljc b/src/a.cljc\n+(defn wanted [x] x)\n" expect))))
+  (check "a patch that sprays extra files fails"
+         (not (:meets-spec (ev/check (str good "diff --git a/other.cljc b/other.cljc\n+x\n") expect))))
+  (check "an empty patch fails" (not (:meets-spec (ev/check "" expect))))
+  (check "a gate rejection fails the run even when the patch meets the spec"
+         (not (:pass (ev/score-run {:task "t" :rep 1 :expect expect
+                                    :payload {:diff good} :verdict :rejected}))))
+  (check "pass rate is over attempts, not best-of-N"
+         (= 1 (get-in (ev/summarize [{:task "t" :pass true} {:task "t" :pass false}
+                                     {:task "t" :pass false}])
+                      [:tasks "t" :passed]))))
+
+(println "\n10. sandbox path confinement")
 (let [out (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
                            #js {:encoding "utf8"})]
   (print out)
