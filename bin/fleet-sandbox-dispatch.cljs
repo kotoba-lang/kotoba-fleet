@@ -34,6 +34,7 @@
             [clojure.string :as str]
             [cljs.reader :as reader]
             [fleet.filestore :as filestore]
+            [fleet.gate :as gate]
             [kotoba.fleet.store :as store]
             [kotoba.fleet.agent :as agent]
             [kotoba.fleet.governor :as gov]
@@ -127,7 +128,8 @@
                      :test-cmd (:test-cmd spec)
                      :endpoint endpoint
                      :model model
-                     :budget (:budget spec)}
+                     :budget (:budget spec)
+                     :exec-backing (get spec :exec-backing :sandbox-exec)}
         local-spec (path/join state-dir (str (:work-id spec) "-spec.edn"))
         started (now)]
     (println (str "  model: " model
@@ -149,7 +151,11 @@
           result (reader/read-string (str/trim body))]
       ;; the sandbox is ephemeral: nothing is left on the node between runs
       (sh "ssh" [node (str "rm -rf " remote-root)])
-      (println (str "  sandbox: stop=" (name (or (:stop result) :?))
+      (println (str "  sandbox: backing=" (name (or (:exec-backing result) :?))
+                    " blocked=" (count (get-in result [:exec-probe :blocked]))
+                    "/" (+ (count (get-in result [:exec-probe :blocked]))
+                           (count (get-in result [:exec-probe :leaked])))
+                    "\n  sandbox: stop=" (name (or (:stop result) :?))
                     " turns=" (:turns result)
                     " tools=" (:tool-calls result)
                     " tests-exit=" (get-in result [:tests :final-exit])
@@ -171,48 +177,26 @@
            "")})
 
 ;; ---------------------------------------------------------------------------
-;; gate — the governor's own checks. Nothing here trusts the agent.
-
-(defn diff-files [diff]
-  (->> (str/split-lines (or diff ""))
-       (keep #(second (re-find #"^diff --git a/(\S+) b/" %)))
-       distinct))
+;; gate — the governor's own checks (rules live in fleet.gate; this only
+;; supplies the facts it cannot compute itself)
 
 (defn make-gate [db pristine]
   (fn [proposal]
     (let [p (:proposal/payload proposal)
-          files (diff-files (:diff p))
-          holder (lease/holder db (:proposal/work proposal) (now))
-          reasons
-          (cond-> []
-            (not= holder (:proposal/agent proposal))
-            (conj (str "proposer does not hold the lease (holder=" holder ")"))
-
-            (str/blank? (:diff p)) (conj "empty diff")
-
-            (not= pin (:pin p)) (conj "payload pin != dispatched pin")
-
-            (some (fn [f] (some #(str/starts-with? f %) protected-paths)) files)
-            (conj (str "touches a protected path: " (vec files)))
-
-            (not= 0 (get-in p [:tests :final-exit]))
-            (conj (str "tests not green on the node (exit="
-                       (get-in p [:tests :final-exit]) ")"))
-
-            (= :error (:stop p)) (conj (str "agent errored: " (:error p)))
-
-            (nil? pristine) (conj "no pinned tree to verify the patch against")
-
-            ;; does the patch actually apply to the pinned tree?
-            (and (some? pristine)
-                 (not (try (git ["-C" pristine "apply" "--check" "-"]
-                               {:input (:diff p)}) true
-                           (catch :default _ false))))
-            (conj "patch does not apply cleanly to the pinned tree"))]
-      (if (seq reasons)
-        (do (println (str "  gate: REJECT — " (str/join "; " reasons))) false)
-        (do (println (str "  gate: accept (" (count files) " file(s): "
-                          (str/join ", " files) ")"))
+          applies? (when (some? pristine)
+                     (try (git ["-C" pristine "apply" "--check" "-"] {:input (:diff p)}) true
+                          (catch :default _ false)))
+          rs (gate/reasons {:payload p
+                            :agent (:proposal/agent proposal)
+                            :holder (lease/holder db (:proposal/work proposal) (now))
+                            :pin pin
+                            :protected-paths protected-paths
+                            :allow-unsandboxed? (:allow-unsandboxed-exec spec)
+                            :patch-applies? applies?})]
+      (if (seq rs)
+        (do (println (str "  gate: REJECT — " (str/join "; " rs))) false)
+        (do (println (str "  gate: accept (" (count (gate/diff-files (:diff p))) " file(s): "
+                          (str/join ", " (gate/diff-files (:diff p))) ")"))
             true)))))
 
 ;; ---------------------------------------------------------------------------

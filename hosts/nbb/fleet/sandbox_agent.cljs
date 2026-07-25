@@ -13,8 +13,15 @@
      node never sees, and cannot reach, the operator's checkouts.
   2. Every tool path is resolved and confined under `<root>/work`; `..`,
      absolute paths and symlink escapes are rejected before any I/O.
-  3. The only command the agent can run is the spec's `:test-cmd`. There is no
-     generic shell tool, so the model cannot widen its own authority.
+  3. The only command the agent can run is the spec's `:test-cmd` — but the
+     agent can WRITE the code that command executes, so confining the file API
+     is not enough on its own. `:test-cmd` therefore runs under an OS-level
+     exec backing (macOS Seatbelt via `sandbox-exec`) that denies all network
+     access, denies reads of the node's real home (ssh keys, tokens, tailnet
+     state), and permits writes only inside the ephemeral sandbox. The backing
+     is PROVED at startup by trying those escapes and refusing to run the
+     session if any succeeds — a missing or broken profile fails closed, never
+     silently downgrades to unsandboxed execution.
   4. The throwaway `git init` inside the sandbox exists ONLY to compute the
      patch (`git diff --binary`). No remote is ever configured, so no push /
      fetch / credential path exists from here.
@@ -35,8 +42,9 @@
 
 (def argv (vec (.-argv js/process)))
 (def selftest? (boolean (some #{"--selftest"} argv)))
+(def exec-probe? (boolean (some #{"--exec-probe"} argv)))
 (def spec
-  (if selftest?
+  (if (or selftest? exec-probe?)
     {:work-id "selftest" :root (fs/mkdtempSync "/tmp/fleet-sandbox-selftest-")}
     (let [p (or (second (drop-while #(not= "--spec" %) argv))
                 (throw (ex-info "usage: sandbox_agent.cljs --spec <spec.edn>" {})))]
@@ -61,6 +69,116 @@
                    (clj->js (merge {:encoding "utf8" :maxBuffer (* 32 1024 1024)} opts))))
 
 ;; ---------------------------------------------------------------------------
+;; 0. exec backing — the boundary for code the AGENT wrote
+;;
+;; Confining the file tools is not the same as confining execution: the agent
+;; writes the test file that `:test-cmd` then runs, so without this every run
+;; was arbitrary code execution as the node user (ssh keys, tailnet identity,
+;; unrestricted egress). Everything the agent can cause to execute goes through
+;; `exec!`.
+;;
+;; macOS Seatbelt is what every fleet node actually has today (all nodes are
+;; macOS 26; none has docker/podman/colima — only lima, with no instance). The
+;; backing is a value, not a hardcoded mechanism, so a Linux container backing
+;; can be added without touching the loop or the tools.
+
+(def real-home (or (.-HOME js/process.env) "/Users/nobody"))
+(def sandbox-home (path/join root "home"))
+(def sandbox-tmp (path/join root "tmp"))
+(def profile-path (path/join root "sandbox.sb"))
+(def exec-backing
+  ;; --backing exists so the probe can be run against a DISABLED backing: a
+  ;; containment probe that cannot fail proves nothing, so the negative control
+  ;; has to be runnable on the same host.
+  (or (some-> (second (drop-while #(not= "--backing" %) argv)) keyword)
+      (get spec :exec-backing :sandbox-exec)))
+
+(def ^:private profile-src
+  ;; SBPL: last matching rule wins, so the allows below deliberately follow the
+  ;; broad denies. `(allow default)` keeps dyld/exec/system reads working; the
+  ;; three denies are the whole security claim.
+  (str "(version 1)\n"
+       "(allow default)\n"
+       "(deny network*)\n"
+       "(deny file-read* (subpath (param \"REAL_HOME\")))\n"
+       "(deny file-write*)\n"
+       "(allow file-write* (subpath (param \"WORK\")) (subpath (param \"SBHOME\")) (subpath (param \"SBTMP\")))\n"
+       "(allow file-write* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\")\n"
+       "                   (literal \"/dev/urandom\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
+       "(allow file-write* (regex #\"^/dev/fd/[0-9]+$\") (regex #\"^/dev/ttys[0-9]*$\"))\n"))
+
+(defn- install-backing! []
+  (when (str/starts-with? root real-home)
+    ;; the profile denies reads under the node's real home; a sandbox rooted
+    ;; there would deny its own workspace
+    (throw (ex-info (str "sandbox root must live outside the node's home: " root) {})))
+  (fs/mkdirSync sandbox-home #js {:recursive true})
+  (fs/mkdirSync sandbox-tmp #js {:recursive true})
+  (fs/writeFileSync profile-path profile-src))
+
+(defn exec!
+  "Run `cmd` (a shell string) under the exec backing. Returns {:exit :out}.
+  This is the ONLY path by which agent-authored code runs."
+  [cmd {:keys [timeout-ms]}]
+  (let [env (js/Object.assign #js {} js/process.env
+                              #js {"HOME" sandbox-home "TMPDIR" sandbox-tmp})
+        [prog args] (case exec-backing
+                      :sandbox-exec
+                      ["sandbox-exec" ["-f" profile-path
+                                       "-D" (str "REAL_HOME=" real-home)
+                                       "-D" (str "WORK=" work-dir)
+                                       "-D" (str "SBHOME=" sandbox-home)
+                                       "-D" (str "SBTMP=" sandbox-tmp)
+                                       "sh" "-c" cmd]]
+                      ;; explicit, recorded in the payload, and rejected by the
+                      ;; dispatcher's gate unless the work-unit opts in
+                      :none ["sh" ["-c" cmd]]
+                      (throw (ex-info (str "unknown :exec-backing " exec-backing) {})))]
+    (try {:exit 0 :out (sh prog args {:cwd work-dir :env env
+                                      :timeout (or timeout-ms 300000)
+                                      :stdio ["ignore" "pipe" "pipe"]})}
+         (catch :default e
+           {:exit (or (.-status e) 1)
+            :out (str (some-> (.-stdout e) str) "\n" (some-> (.-stderr e) str))}))))
+
+(def ^:private probe-marks
+  ;; Probing a write escape must not litter the node when the backing is
+  ;; deliberately :none (the escapes then really do succeed), so the targets are
+  ;; run-specific and removed afterwards.
+  [(str real-home "/.fleet-sandbox-probe-" (.-pid js/process))
+   (str "/private/tmp/.fleet-sandbox-probe-" (.-pid js/process))])
+
+(def escape-probes
+  "What the backing must make impossible. Each entry must EXIT NON-ZERO."
+  [{:id :read-home-ssh :cmd (str "ls " real-home "/.ssh")}
+   {:id :read-home     :cmd (str "ls " real-home)}
+   {:id :network-curl  :cmd "curl -sS --max-time 8 https://example.com -o /dev/null"}
+   {:id :network-node  :cmd "node -e \"require('node:https').get('https://example.com',r=>process.exit(0)).on('error',()=>process.exit(9))\""}
+   {:id :write-home    :cmd (str "echo pwn > " (first probe-marks))}
+   {:id :write-outside :cmd (str "echo pwn > " (second probe-marks))}])
+
+(defn probe-backing
+  "Try every escape. Returns {:backing … :blocked [ids] :leaked [ids]}."
+  []
+  (let [results (doall
+                 (for [{:keys [id cmd]} escape-probes]
+                   [id (not= 0 (:exit (exec! cmd {:timeout-ms 20000})))]))]
+    ;; this process is NOT sandboxed, so it can clean up whatever leaked through
+    (doseq [m probe-marks] (try (fs/unlinkSync m) (catch :default _ nil)))
+    {:backing exec-backing
+     :blocked (mapv first (filter second results))
+     :leaked  (mapv first (remove second results))}))
+
+(defn- verify-backing! []
+  (let [{:keys [leaked] :as p} (probe-backing)]
+    (log "  exec backing:" (name exec-backing)
+         "blocked" (count (:blocked p)) "/" (count escape-probes))
+    (when (and (seq leaked) (not= :none exec-backing))
+      ;; fail closed: a backing that does not hold is not a backing
+      (throw (ex-info (str "exec backing failed to contain: " (pr-str leaked)) p)))
+    p))
+
+;; ---------------------------------------------------------------------------
 ;; 1. ephemeral workspace from the pinned tarball
 
 (defn- extract! []
@@ -76,7 +194,8 @@
     (sh "tar" (concat ["xzf" tarball "-C" work-dir]
                       (when wrapped? ["--strip-components=1"])) {}))
   ;; throwaway local git ONLY as the diff engine (invariant 4)
-  (let [g (fn [& args] (sh "git" (concat ["-C" work-dir] args) {}))]
+  (let [g (fn [& args] (sh "git" (concat ["-C" work-dir "-c" "core.hooksPath=/dev/null"]
+                                        args) {}))]
     (g "init" "-q")
     (g "-c" "user.email=sandbox@fleet.local" "-c" "user.name=fleet-sandbox" "add" "-A")
     (g "-c" "user.email=sandbox@fleet.local" "-c" "user.name=fleet-sandbox"
@@ -169,19 +288,14 @@
 
 (defn- t-run-tests [_]
   (let [started (js/Date.now)
-        res (try {:exit 0
-                  :out (sh "sh" ["-c" test-cmd] {:cwd work-dir
-                                                 :timeout (:test-timeout-ms budget)
-                                                 :stdio ["ignore" "pipe" "pipe"]})}
-                 (catch :default e
-                   {:exit (or (.-status e) 1)
-                    :out (str (some-> (.-stdout e) str) "\n" (some-> (.-stderr e) str))}))
+        res (exec! test-cmd {:timeout-ms (:test-timeout-ms budget)})
         tail (->> (str/split-lines (str (:out res))) (take-last 25) (str/join "\n"))]
     (swap! test-runs conj {:exit (:exit res) :ms (- (js/Date.now) started) :tail tail})
     (str "exit=" (:exit res) "\n" tail)))
 
-;; `sh -c <test-cmd>` is the ONE command the agent can reach, and only with the
-;; dispatcher-supplied string — the model never supplies a command.
+;; The test command is the ONE command the agent can reach, it is supplied by
+;; the dispatcher (never by the model), and it runs under the exec backing —
+;; so code the agent writes into the test suite is contained too.
 (def tools
   {"list_files" t-list-files
    "read_file"  t-read-file
@@ -324,8 +438,12 @@
 ;; 4. patch + result
 
 (defn- patch! []
-  (sh "git" ["-C" work-dir "add" "-A"] {})
-  (let [p (sh "git" ["-C" work-dir "diff" "--binary" "HEAD"] {})]
+  ;; core.hooksPath=/dev/null: the agent can create .git/hooks/* inside the
+  ;; sandbox, and our own git calls must not become an execution path for it.
+  (let [g (fn [& args] (sh "git" (concat ["-C" work-dir "-c" "core.hooksPath=/dev/null"]
+                                         args) {}))
+        _ (g "add" "-A")
+        p (g "diff" "--binary" "HEAD")]
     (when (> (count p) (:max-patch-bytes budget))
       (throw (ex-info (str "patch exceeds budget: " (count p) " bytes") {})))
     p))
@@ -333,7 +451,9 @@
 (defn -main []
   (log "sandbox:" (:work-id spec) "on" (str/trim (sh "hostname" [] {})))
   (extract!)
-  (let [outcome (try (run-loop!) (catch :default e {:stop :error :error (.-message e) :turns 0}))
+  (install-backing!)
+  (let [probe (verify-backing!)      ; throws before any model call if it leaks
+        outcome (try (run-loop!) (catch :default e {:stop :error :error (.-message e) :turns 0}))
         ;; a final authoritative test run — the gate must not trust the model's
         ;; word that it went green
         final-test (t-run-tests {})
@@ -341,6 +461,8 @@
         result {:work-id (:work-id spec)
                 :node (str/trim (sh "hostname" [] {}))
                 :model model
+                :exec-backing exec-backing
+                :exec-probe probe
                 :stop (:stop outcome)
                 :error (:error outcome)
                 :turns (:turns outcome)
@@ -376,4 +498,15 @@
       (println "confinement ok")
       (do (println "confinement FAILED") (js/process.exit 1)))))
 
-(if selftest? (-selftest) (-main))
+(defn -exec-probe
+  "Report what the backing blocks on THIS host (used by selftest and to verify
+  a fleet node before trusting it with work)."
+  []
+  (fs/mkdirSync work-dir #js {:recursive true})
+  (install-backing!)
+  (println (pr-str (probe-backing))))
+
+(cond
+  exec-probe? (-exec-probe)
+  selftest?   (-selftest)
+  :else       (-main))
