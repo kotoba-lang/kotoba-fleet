@@ -171,9 +171,32 @@ One tick takes up to `--max` units, probes the nodes ONCE, and dispatches each
 through the same `fleet.dispatch` flow. It is deliberately bounded rather than a
 daemon: every unit is leased, every decision is a signed receipt, and a tick
 that dies halfway leaves a lease that expires so the next tick picks the unit
-up. Cadence belongs to whatever schedules the tick (a launchd plist calling
-this command, a cron trigger) — not to a process that has to stay alive. That
-scheduler is still Mac-side today; nothing in the fleet schedules itself yet.
+up. Cadence belongs to whatever schedules the tick, not to a process that has
+to stay alive.
+
+**Installed schedule** (`deploy/`, macOS side — the fleet still does not
+schedule itself):
+
+```bash
+cp deploy/run-fleet-tick.cljs ~/.gftd/
+sed -e "s|__HOME__|$HOME|g" -e "s|__FLEET_ROOT__|$HOME/github/com-junkawasaki|"     deploy/com.gftd.fleet-tick.plist.tmpl > ~/Library/LaunchAgents/com.gftd.fleet-tick.plist
+launchctl load ~/Library/LaunchAgents/com.gftd.fleet-tick.plist
+```
+
+Hourly, one unit per tick, reading `~/.gftd/fleet-queue/*.edn`. An empty queue
+is a no-op, so installing the timer costs nothing until work is put in it. The
+standing policy for UNATTENDED runs is deliberately narrower than the
+interactive one:
+
+| | unattended default | why |
+|---|---|---|
+| materialize | `dry-run` | a scheduled job should not quietly acquire write access to repositories. Pushing is one env var away (`FLEET_TICK_MATERIALIZE=push`) and still needs `:allow-push` on the work-unit plus an explicit `FLEET_PUSH_TOKEN` |
+| store | `file` | the shared kotobase log needs the kagi vault, which needs an unlocked keychain a scheduler may not have. `FLEET_TICK_STORE=kotobase` once that is established |
+| max units | 1 | the queue drains steadily instead of one tick occupying the fleet |
+
+Verified end to end on the schedule, not just by hand: a queued unit ran under
+`launchctl start`, reached a fleet node, came back accepted with a signed
+receipt in 59s, and the agent read the vault key fine under launchd.
 
 ### Where the log lives
 
