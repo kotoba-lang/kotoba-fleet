@@ -90,9 +90,41 @@ lease (kotoba.fleet.lease)
 | piece | file | role |
 |---|---|---|
 | file-backed `:db-api` | `hosts/nbb/fleet/filestore.cljs` | the same append-only contract as `MemStore`, but shared by separate OS processes (ordinal assigned under a lock — the file analogue of `swap!`) |
-| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: ephemeral workdir from a pinned tarball, path-confined tools, one allowlisted test command, enforced budgets, emits a patch |
+| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: ephemeral workdir from a pinned tarball, path-confined tools, one allowlisted test command under an OS-level exec backing, enforced budgets, emits a patch |
+| admission rules | `hosts/nbb/fleet/gate.cljs` | pure governor rules — lease holder, protected paths, green tests, **exec backing** |
 | dispatcher | `bin/fleet-sandbox-dispatch.cljs` | lease → remote run → proposal → gate → materialize → receipt |
-| host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; path-confinement matrix |
+| host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; gate admission matrix; exec-backing containment; path confinement |
+
+### Execution isolation
+
+Confining the file tools is not enough on its own: the agent writes the code
+that the test command then runs, so **`:test-cmd` is an execution path the agent
+controls**. Everything the agent can cause to execute goes through one function
+(`exec!`) and runs under an exec backing — today macOS Seatbelt, which is what
+every fleet node actually has (all nodes are macOS 26; no docker/podman/colima,
+only `lima` with no instance). The profile denies **all network access**, denies
+reads of the node's **real home** (ssh keys, tokens, tailnet state), and permits
+writes only inside the ephemeral sandbox.
+
+The backing is proved, not assumed. Each session probes its own containment
+before the first model call and **fails closed** if anything gets through, and
+the governor rejects a proposal that ran with the backing disabled or whose
+probe leaked — even when the tests are green. Opting out is a property of the
+work-unit (`:allow-unsandboxed-exec`), never of the runtime.
+
+```bash
+nbb hosts/nbb/fleet/sandbox_agent.cljs --exec-probe                  # what does this host contain?
+nbb hosts/nbb/fleet/sandbox_agent.cljs --exec-probe --backing none   # negative control
+```
+
+Measured on fleet node `naphtali` (macOS 26.2): with the backing, all six
+escapes — `~/.ssh` read, home listing, curl egress, node egress, write to home,
+write outside the sandbox — are blocked; with `--backing none`, all six succeed.
+A containment probe that cannot fail proves nothing, so the negative control is
+runnable on the same host.
+
+The backing is a value, so a Linux container / microVM backing can be added
+without touching the loop, the tools, or the gate.
 
 What the shape guarantees, independent of how the model behaves: the node gets
 an exact pinned commit (never the operator's drifting checkout); the agent
@@ -102,9 +134,10 @@ paths, patch applies to the pinned tree, tests actually green) rather than
 trusting the agent's report; and losing the lease race is a backoff, so several
 dispatchers can point at one log without a lock server.
 
-Not yet: OS-level isolation is a fleet node + ephemeral dir + path confinement,
-not a container or microVM, and `--materialize dry-run` lands the patch as a
-local commit for inspection — nothing is pushed.
+Not yet: the exec backing is Seatbelt on a shared node, not a container or
+microVM (a compromised process still shares the node's kernel and can see other
+processes), and `--materialize dry-run` lands the patch as a local commit for
+inspection — nothing is pushed.
 
 ## Build
 

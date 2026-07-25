@@ -19,6 +19,7 @@
             [clojure.string :as str]
             [cljs.reader :as reader]
             [fleet.filestore :as filestore]
+            [fleet.gate :as gate]
             [kotoba.fleet.agent :as agent]
             [kotoba.fleet.governor :as gov]
             [kotoba.fleet.lease :as lease]
@@ -100,7 +101,38 @@
                                :materialize (fn [p] (swap! writes conj :again))})
                (= ["a"] @writes)))))
 
-(println "\n4. sandbox path confinement")
+(println "\n4. the governor admits isolation, it does not take the node's word")
+(let [ok {:diff "diff --git a/src/x.cljc b/src/x.cljc\n+1\n" :pin "abc"
+          :exec-backing :sandbox-exec :exec-probe {:leaked []}
+          :stop :model-done :tests {:final-exit 0}}
+      ctx {:payload ok :agent "a" :holder "a" :pin "abc"
+           :protected-paths ["manifest/"] :allow-unsandboxed? false :patch-applies? true}
+      why (fn [m] (gate/reasons (merge ctx m)))]
+  (check "a clean sandboxed proposal is admissible" (empty? (why {})))
+  (check "unsandboxed exec is rejected even with green tests"
+         (some #(str/includes? % "not :sandbox-exec")
+               (why {:payload (assoc ok :exec-backing :none)})))
+  (check "a backing that leaked during its own probe is rejected"
+         (some #(str/includes? % "leaked")
+               (why {:payload (assoc ok :exec-probe {:leaked [:network-curl]})})))
+  (check "the work-unit can opt out explicitly, and only explicitly"
+         (empty? (why {:payload (assoc ok :exec-backing :none) :allow-unsandboxed? true})))
+  (check "a non-holder is rejected" (seq (why {:holder "b"})))
+  (check "a protected path is rejected"
+         (seq (why {:payload (assoc ok :diff "diff --git a/manifest/west.yml b/manifest/west.yml\n+x\n")})))
+  (check "red tests are rejected" (seq (why {:payload (assoc ok :tests {:final-exit 1})})))
+  (check "a patch that does not apply is rejected" (seq (why {:patch-applies? false}))))
+
+(println "\n5. exec backing contains agent-authored code")
+(let [probe (reader/read-string
+             (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--exec-probe"]
+                              #js {:encoding "utf8"}))]
+  (check "backing is sandbox-exec" (= :sandbox-exec (:backing probe)) (pr-str (:backing probe)))
+  (check "every escape is blocked (home read, ssh keys, network, outside write)"
+         (empty? (:leaked probe))
+         (str "blocked=" (pr-str (:blocked probe)) " leaked=" (pr-str (:leaked probe)))))
+
+(println "\n6. sandbox path confinement")
 (let [out (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
                            #js {:encoding "utf8"})]
   (print out)
