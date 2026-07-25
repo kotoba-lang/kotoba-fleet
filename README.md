@@ -93,10 +93,87 @@ lease (kotoba.fleet.lease)
 | sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: ephemeral workdir from a pinned tarball, path-confined tools, one allowlisted test command under an OS-level exec backing, enforced budgets, emits a patch |
 | admission rules | `hosts/nbb/fleet/gate.cljs` | pure governor rules — lease holder, protected paths, green tests, **exec backing** |
 | dispatcher | `bin/fleet-sandbox-dispatch.cljs` | lease → remote run → proposal → gate → materialize → receipt |
+| the flow | `hosts/nbb/fleet/dispatch.cljs` | one work-unit end to end — shared by the interactive dispatcher and the tick, so they cannot drift |
+| plumbing | `hosts/nbb/fleet/cli.cljs` / `github.cljs` | argv, processes, HTTP; and the one place that talks to GitHub (explicit token or anonymous, never an ambient login) |
+| receipts | `hosts/nbb/fleet/receipt.cljs` | the signed decision shape, the sign-off rule, and the published ledger |
+| nodes | `hosts/nbb/fleet/node.cljs` + `bin/fleet-nodes.cljs` | measure what each machine can do, and pick one |
+| standing tick | `bin/fleet-tick.cljs` | one bounded pass over the work queue |
 | shared log | `hosts/nbb/fleet/kotobase_store.cljs` | the same `:db-api` on kotobase.net, so the log is shared across MACHINES |
 | agent identity | `hosts/nbb/fleet/identity.cljs` | the dispatcher's own narrow key (kagi) — CACAO auth + signed receipts |
 | observer | `bin/fleet-observe.cljs` | read the fleet log from any machine, with no fleet key |
 | host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; gate admission matrix; exec-backing containment; identity + receipt signatures; graph derivation; path confinement |
+
+### Landing a patch, and who decides
+
+```bash
+--materialize dry-run   # local commits in a scratch repo, pushed nowhere (default)
+--materialize push      # a branch + PR on the real repo
+--publish               # append the signed receipt to the published ledger
+```
+
+`push` needs an explicit `FLEET_PUSH_TOKEN` **and** a work-unit that opted in
+(`:allow-push true`). It lands a **branch and a PR**, never a push to main and
+never a pin advance: this repo's rule is that advancing a pin is a separate,
+verified act, and an agent patch arriving as a reviewable branch keeps that
+true. The blobs uploaded are produced by applying the gate-verified patch to
+the pinned tree, so what lands is exactly what was judged.
+
+`--publish` appends the signed receipt to `manifest/fleet-sandbox.edn` on the
+superproject (`FLEET_LEDGER_TOKEN`), optimistic-locked on the file's blob sha
+so two fleets can publish into one ledger without a lock and without either
+losing a line. The ledger stays append-only on purpose: the 2026-07-25 policy
+that documents show latest state (ADR-2607257000) explicitly keeps append-only
+for signed event streams — rewriting a receipt destroys the thing a signature
+is for.
+
+Two kinds of path, two different answers:
+
+| in the work-unit | meaning |
+|---|---|
+| `:protected-paths` | an agent may **never** land here — the gate rejects |
+| `:signoff-paths` | allowed, but only behind a human decision — the proposal is **held** |
+
+A held proposal stays pending until someone appends a signed approval
+(`--approve <proposal-id>`), which is itself a fact in the log: the approver
+signs the proposal id, so an approval cannot be moved to another proposal or
+minted by a key the fleet does not recognise. `--drain` then decides it
+**without re-running the agent** — re-running would spend a sandbox session
+reproducing a patch a human already approved, and might not reproduce it.
+
+### Which machine runs it
+
+```bash
+nbb --classpath … bin/fleet-nodes.cljs --nodes a,b,c --requires nbb,git
+… bin/fleet-sandbox-dispatch.cljs --work w.edn --node auto --nodes a,b,c
+```
+
+A work-unit declares what it NEEDS (`:requires #{:nbb :git}`) and the fleet
+picks a machine that has it. Capabilities are measured on the node, including
+the strongest one: `contains-exec` runs the sandbox agent's own containment
+probe there, so a machine that cannot contain agent-authored code is ineligible
+however much toolchain it has. Measured on the mesh today:
+
+```
+naphtali  caps=git,nbb,node,sandbox-exec          exec=contained (6 blocked)
+asher     caps=clojure,git,jdk,nbb,node,…         exec=contained (6 blocked)
+zebulun   caps=clojure,git,jdk,node,sandbox-exec  exec=unprobed   (no nbb)
+judah     caps=clojure,git,jdk,node,sandbox-exec  exec=unprobed   (no nbb)
+```
+
+### Standing tick
+
+```bash
+nbb --classpath … bin/fleet-tick.cljs --work-dir examples --max 3 \
+    --store kotobase --db-name fleet-log --nodes naphtali,asher --publish
+```
+
+One tick takes up to `--max` units, probes the nodes ONCE, and dispatches each
+through the same `fleet.dispatch` flow. It is deliberately bounded rather than a
+daemon: every unit is leased, every decision is a signed receipt, and a tick
+that dies halfway leaves a lease that expires so the next tick picks the unit
+up. Cadence belongs to whatever schedules the tick (a launchd plist calling
+this command, a cron trigger) — not to a process that has to stay alive. That
+scheduler is still Mac-side today; nothing in the fleet schedules itself yet.
 
 ### Where the log lives
 

@@ -8,6 +8,8 @@
  :repo    "kotoba-lang/kotoba-delta"
  :pin     "c8c405abda731e5889aff3ae2a18ac208b375bb5"
  :node    "naphtali"
+ :requires #{:nbb :git}
+ :allow-push true
  :test-cmd "nbb --classpath src:test run-tests.cljs"
  :ttl-ms  1800000
  :protected-paths [".github/" ".git/" "package.json" "package-lock.json"]
