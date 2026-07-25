@@ -44,8 +44,9 @@
 (def selftest? (boolean (some #{"--selftest"} argv)))
 (def exec-probe? (boolean (some #{"--exec-probe"} argv)))
 (def spec
-  (if (or selftest? exec-probe?)
-    {:work-id "selftest" :root (fs/mkdtempSync "/tmp/fleet-sandbox-selftest-")}
+  (if (or selftest? exec-probe? (some #{"--ctx-probe"} argv))
+    {:work-id "selftest" :root (fs/mkdtempSync "/tmp/fleet-sandbox-selftest-")
+     :endpoint "https://infer.murakumo.cloud/v1/chat/completions"}
     (let [p (or (second (drop-while #(not= "--spec" %) argv))
                 (throw (ex-info "usage: sandbox_agent.cljs --spec <spec.edn>" {})))]
       (reader/read-string (fs/readFileSync p "utf8")))))
@@ -61,15 +62,26 @@
                        :max-file-bytes 60000 :max-patch-bytes 400000
                        :max-write-bytes 4000 :max-model-errors 2
                        ;; The serving endpoint counts prompt + generation against ONE
-                       ;; window (measured: n_ctx 8192 on murakumo-main today), so a
-                       ;; generous :max-tokens silently halves the room to think in.
-                       ;; :ctx-tokens is that window; the loop keeps the prompt under
-                       ;; what is left after :max-tokens.
+                       ;; window, so a generous :max-tokens silently eats the room to
+                       ;; think in. :ctx-tokens is that window — MEASURED from the
+                       ;; server at startup (see ctx-window!), not assumed, because
+                       ;; assuming it is how a stale 8192 would keep the agent
+                       ;; trimming history it no longer needs to.
                        :ctx-tokens 8192 :history-floor 2}
                       (:budget spec)))
 (def deadline (+ (js/Date.now) (:deadline-ms budget)))
 
 (defn- log [& xs] (binding [*print-fn* *print-err-fn*] (apply println xs)))
+
+(def ctx-tokens
+  "The server's per-slot context window, asked for rather than guessed.
+
+  llama.cpp reports it at /props as default_generation_settings.n_ctx (total
+  context divided by the number of slots — the number an individual request is
+  actually measured against). A hardcoded guess is worse than useless here: it
+  was 8192 when this loop was written and raising it to 65536 changed nothing
+  the agent believed, so it kept eliding history it had room for."
+  (atom nil))
 (defn- sh [cmd args opts]
   (cp/execFileSync cmd (clj->js args)
                    (clj->js (merge {:encoding "utf8" :maxBuffer (* 32 1024 1024)} opts))))
@@ -387,7 +399,7 @@
   failures — every L3 attempt died on it before the model had shown whether it
   could do the task at all."
   [messages]
-  (let [budget-tokens (- (:ctx-tokens budget) (:max-tokens budget) 256)
+  (let [budget-tokens (- (or @ctx-tokens (:ctx-tokens budget)) (:max-tokens budget) 256)
         floor (:history-floor budget)]
     (loop [i 1]
       (when (and (> (est-tokens messages) budget-tokens)
@@ -497,8 +509,21 @@
       (throw (ex-info (str "patch exceeds budget: " (count p) " bytes") {})))
     p))
 
+(defn- ctx-window!
+  "Ask the endpoint for its window; keep the spec's value when it will not say."
+  []
+  (let [base (str/replace (str endpoint) #"/v1/.*$" "")
+        n (try (-> (sh "curl" ["-sS" "--max-time" "10" (str base "/props")] {})
+                   js/JSON.parse (aget "default_generation_settings") (aget "n_ctx"))
+               (catch :default _ nil))]
+    (reset! ctx-tokens (if (and (number? n) (pos? n)) n (:ctx-tokens budget)))
+    (log "  context window:" @ctx-tokens "tokens"
+         (if (number? n) "(measured)" "(spec default — server did not report)"))
+    @ctx-tokens))
+
 (defn -main []
   (log "sandbox:" (:work-id spec) "on" (str/trim (sh "hostname" [] {})))
+  (ctx-window!)
   (extract!)
   (install-backing!)
   (let [probe (verify-backing!)      ; throws before any model call if it leaks
@@ -547,6 +572,8 @@
       (println "confinement ok")
       (do (println "confinement FAILED") (js/process.exit 1)))))
 
+(defn -ctx-probe [] (println (pr-str {:endpoint endpoint :ctx-tokens (ctx-window!)})))
+
 (defn -exec-probe
   "Report what the backing blocks on THIS host (used by selftest and to verify
   a fleet node before trusting it with work)."
@@ -556,6 +583,7 @@
   (println (pr-str (probe-backing))))
 
 (cond
+  (some #{"--ctx-probe"} argv) (-ctx-probe)
   exec-probe? (-exec-probe)
   selftest?   (-selftest)
   :else       (-main))

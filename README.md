@@ -253,31 +253,36 @@ attempt per work-unit, so a task that succeeds one time in three is a task that
 fails two thirds of the time.
 
 Measured results live in `examples/eval/results/` — read them there rather than
-trusting a number quoted in prose. As of 2026-07-25, `murakumo-main`
-(qwen3.6-35b-a3b), 12 attempts in 15.4 min on `naphtali`:
+trusting a number quoted in prose.
 
-| level | pass | what happened |
+**The window was the ceiling, and it was raised.** The first run (2026-07-25,
+`murakumo-main` = qwen3.6-35b-a3b, 12 attempts) scored L1 3/3, L2 2/3, L3 0/3,
+L4 0/3 — and the dominant failure was not reasoning but the serving window:
+**8192 tokens**, prompt and generation counted together, so every L3 attempt was
+refused at turn 0 before the model saw the task. The agent learned to elide old
+tool results and retry a refusal by freeing history; that kept sessions alive
+but L3 stayed 0/3, which made it look like a model ceiling.
+
+It was not. The inference head was running `--ctx-size 8192` while `infer.edn`
+had documented `:infer/ctx 262144` for weeks. Raised to
+`--ctx-size 262144 --parallel 4` = **65536 per slot** (murakumo
+`deploy/llama-server.service`), and re-measured:
+
+| level | 8k window | 64k window |
 |---|---|---|
-| L1 | **3/3** | 5–7 turns, clean two-file patches |
-| L2 | **2/3** | found `run-tests.cljs` unprompted twice; the third attempt died on the context window |
-| L3 | **0/3** | never reached the work: all three exhausted the context at turn 0 |
-| L4 | **0/3** | one patch skipped the tests entirely, one went red, one hit the window |
+| L1 one helper + test | 3/3 | — |
+| L2 new ns wired into the suite | 2/3 | — |
+| L3 extend an existing fn, keep 5 tests green | **0/3** | **2/3** |
+| L4 new rule inside multi-reason logic | 0/3 | 0/3 |
 
-The dominant failure was not reasoning but the **serving window: 8192 tokens**,
-prompt and generation counted together — so a `:max-tokens 4000` budget leaves
-~4k to think in, and three of four L3 attempts were refused before the model
-saw the task. The agent now estimates its prompt and elides the oldest tool
-results (announcing each elision, so it does not believe it still has them),
-and retries a context refusal by freeing history rather than by rewording.
+L3 went from "never reached the work" to passing in 6 turns. L4 still fails —
+now on the work itself (red tests, or a patch that skips the test file), never
+on the window — so that one is a genuine capability limit of this model.
 
-Re-measured with that in place: L3 still **0/3**, but the failures moved from
-"refused at turn 0" to 8–18 turns of real work ending in red tests, and a third
-run with `:max-tokens 1200` (more prompt room) was also **0/3**. So the ceiling
-here is the model, not the window: this model reliably adds a helper and a
-test, sometimes wires in a new namespace, and does not extend an existing
-function while keeping five existing tests green. Raising `n_ctx` on the
-serving side is still worth doing — it is what removed the masking — but it
-will not move L3.
+The agent no longer assumes its window: it asks the endpoint at startup
+(`--ctx-probe`) and trims against what the server actually reports, because a
+hardcoded 8192 survived the upgrade and would have kept eliding history it had
+room for.
 
 ### Which agent runtime is canonical
 
