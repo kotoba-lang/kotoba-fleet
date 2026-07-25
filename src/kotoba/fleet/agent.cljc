@@ -1,14 +1,19 @@
 (ns kotoba.fleet.agent
   "Agent-side claim loop — the other half of the fleet from the governor.
 
-  A coding agent (kotoba-code in production) uses this to: pull an OPEN work-unit,
-  optimistically lease it, run the injected `run` fn (its actual coding work), and
-  submit the result as a `:proposal/*` for the governor to materialize. It never
-  writes to git and never takes a lock: if it loses the lease race it just backs
-  off. The `run` fn is the injection seam — a mock in tests, a kotoba-code session
-  in production. The lease is HELD through the proposal so no other agent touches
-  the same unit while the governor decides; it is released after a no-op or once a
-  receipt lands (see `complete!`)."
+  A coding agent uses this to: pull an OPEN work-unit, optimistically lease it,
+  run the injected `run` fn (its actual coding work), and submit the result as a
+  `:proposal/*` for the governor to materialize. It never writes to git and never
+  takes a lock: if it loses the lease race it just backs off. The lease is HELD
+  through the proposal so no other agent touches the same unit while the governor
+  decides; it is released after a no-op or once a receipt lands (see `complete!`).
+
+  `run` is the injection seam: a mock in tests, and in production the **nbb**
+  sandbox agent (`hosts/nbb/fleet/sandbox_agent.cljs`), run on a murakumo fleet
+  node. It was the JVM `kotoba-code` session until 2026-07-25; the nbb host is
+  canonical now (owner decision), which also puts the fleet on the runtime the
+  repo prefers — kotoba-code remains a JVM-side implementation of the same
+  durable-loop design (ADR-2606280001), not the fleet's runtime."
   (:require [kotoba.fleet.governor :as gov]
             [kotoba.fleet.lease :as lease]
             [kotoba.fleet.schema :as schema]
