@@ -22,6 +22,8 @@
             [fleet.filestore :as filestore]
             [fleet.gate :as gate]
             [fleet.identity :as fid]
+            [fleet.kcm :as kcm]
+            [fleet.kcm-provider :as kcm-provider]
             [fleet.kotobase-store :as kbs]
             [fleet.eval :as ev]
             [fleet.node :as fnode]
@@ -135,7 +137,8 @@
 
 (println "\n5. exec backing contains agent-authored code")
 (let [probe (reader/read-string
-             (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--exec-probe"]
+             (cp/execFileSync "nbb" #js ["--classpath" "hosts/nbb"
+                                           "hosts/nbb/fleet/sandbox_agent.cljs" "--exec-probe"]
                               #js {:encoding "utf8"}))]
   (check "backing is sandbox-exec" (= :sandbox-exec (:backing probe)) (pr-str (:backing probe)))
   (check "every escape is blocked (home read, ssh keys, network, outside write)"
@@ -211,14 +214,19 @@
 
 (let [caps [{:node "down" :up false}
             {:node "leaky" :up true :caps #{:nbb :git} :contains-exec false}
-            {:node "good" :up true :caps #{:nbb :git} :contains-exec true}
-            {:node "jvm" :up true :caps #{:nbb :git :jdk} :contains-exec true}]]
+            {:node "good" :up true :caps #{:nbb :git} :contains-exec true
+             :runtime-sha256 "node22"}
+            {:node "jvm" :up true :caps #{:nbb :git :jdk} :contains-exec true
+             :runtime-sha256 "node26"}]]
   (check "an unreachable node is not chosen"
          (not= "down" (:node (fnode/choose caps {:requires #{:nbb}}))))
   (check "a node whose exec backing leaks is not chosen"
          (= "good" (:node (fnode/choose caps {:requires #{:nbb}}))))
   (check "a capability requirement narrows the choice"
          (= "jvm" (:node (fnode/choose caps {:requires #{:jdk}}))))
+  (check "a KCM runtime digest narrows placement before dispatch"
+         (= "jvm" (:node (fnode/choose caps {:requires #{:nbb}
+                                              :runtime-sha256 "node26"}))))
   (check "no eligible node explains itself"
          (str/includes? (:why (fnode/choose caps {:requires #{:cuda}})) "no node satisfies")))
 
@@ -247,10 +255,88 @@
                       [:tasks "t" :passed]))))
 
 (println "\n10. sandbox path confinement")
-(let [out (cp/execFileSync "nbb" #js ["hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
+(let [out (cp/execFileSync "nbb" #js ["--classpath" "hosts/nbb"
+                                       "hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
                            #js {:encoding "utf8"})]
   (print out)
   (when-not (str/includes? out "confinement ok") (swap! failures inc)))
+
+(println "\n11. Kotoba Capability Machine is content-addressed and has no shell surface")
+(let [base {:machine :kotoba-capability-machine
+            :kcm/provider {:archive "/tmp/provider.tar"
+                           :manifest "/tmp/provider.manifest.edn"
+                           :archive-sha256 "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+            :kcm/identity {:definition-closure-cid "bafy-def"
+                           :compiler-cid "bafy-compiler"
+                           :module-lock-cid "bafy-lock"
+                           :target-abi :wasm32-component-v1
+                           :hostcaps-policy-cid "bafy-policy"
+                           :provider-closure-sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                           :runtime-sha256 "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                           :effects []}
+            :kcm/capabilities #{:code/list :code/read :code/edit :build/check :build/compile}
+            :kcm/checks [{:id :test :args ["check" "src/main.kotoba"]
+                          :pure? true}]
+            :kcm/builds [{:id :wasm :args ["compile" "src/main.kotoba"
+                                           "--target" "wasm32-wasi"
+                                           "--output" "target/main.wasm"]}]}
+      id (kcm/machine-id base)]
+  (check "a complete KCM contract validates" (empty? (kcm/validation-reasons base)))
+  (check "machine identity is a SHA-256 content identity" (str/starts-with? id "sha256:") id)
+  (check "map/set ordering does not change machine identity"
+         (= id (kcm/machine-id (assoc base :kcm/capabilities
+                                      #{:build/compile :build/check :code/edit :code/read :code/list}))))
+  (check "changing the compiler changes machine identity"
+         (not= id (kcm/machine-id (assoc-in base [:kcm/identity :compiler-cid] "bafy-other"))))
+  (check "changing the HostCaps policy changes machine identity"
+         (not= id (kcm/machine-id (assoc-in base [:kcm/identity :hostcaps-policy-cid] "bafy-other"))))
+  (check "changing the provider closure changes machine identity"
+         (not= id (kcm/machine-id
+                   (assoc-in base [:kcm/identity :provider-closure-sha256]
+                             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))))
+  (check "a shell-shaped check is rejected"
+         (some #(str/includes? % "beginning with check")
+               (kcm/validation-reasons
+                (assoc base :kcm/checks [{:id :test :args ["sh" "-c" "kotoba check"]}]))))
+  (check "a shell-shaped build is rejected"
+         (some #(str/includes? % "build must have")
+               (kcm/validation-reasons
+                (assoc base :kcm/builds [{:id :wasm :args ["sh" "-c" "kotoba compile"]}]))))
+  (check "an ambient process capability is rejected"
+         (some #(str/includes? % "unknown KCM capabilities")
+               (kcm/validation-reasons
+                (update base :kcm/capabilities conj :process/spawn))))
+  (let [manifest {:format kcm-provider/manifest-format
+                  :compiler-revision "git:test" :module-lock-sha256 (apply str (repeat 64 "a"))
+                  :entry {:nbb-cli "../node_modules/nbb/cli.js"
+                          :classpath ["../outside"] :main "../main.cljs"}
+                  :files [{:path "../main.cljs" :size 1
+                           :sha256 (apply str (repeat 64 "b"))}]}
+        rejected? (try (kcm-provider/verify-manifest!
+                        manifest (kcm-provider/closure-sha256 manifest))
+                       false (catch :default _ true))]
+    (check "provider manifest paths cannot escape the verified closure" rejected?))
+  (check "the model receives no run_tests or shell tool"
+         (= #{"list_files" "read_file" "edit_file" "kotoba_check" "kotoba_build"}
+            (kcm/tool-names base)))
+  (check "cache identity changes with the edited definition graph"
+         (not= (kcm/cache-key base (first (:kcm/checks base)) "patch-a")
+               (kcm/cache-key base (first (:kcm/checks base)) "patch-b")))
+  (let [payload {:diff "diff --git a/src/x.cljc b/src/x.cljc\n+1\n"
+                 :pin "abc" :exec-backing :sandbox-exec :exec-probe {:leaked []}
+                 :stop :model-done :tests {:final-exit 0}
+                 :machine :kotoba-capability-machine :machine-id id
+                 :kcm-contract kcm/contract-version}
+        ctx {:payload payload :agent "a" :holder "a" :pin "abc"
+             :protected-paths [] :patch-applies? true :kcm-spec base}]
+    (check "governor admits the exact dispatched KCM identity"
+           (empty? (gate/reasons ctx)))
+    (check "governor rejects a substituted KCM closure/policy"
+           (some #(str/includes? % "machine identity")
+                 (gate/reasons (assoc-in ctx [:payload :machine-id] "sha256:other"))))
+    (check "governor rejects a legacy sandbox claiming KCM work"
+           (some #(str/includes? % "outside the Kotoba Capability Machine")
+                 (gate/reasons (assoc-in ctx [:payload :machine] :legacy-sandbox))))))
 
 (println (str "\n" (if (zero? @failures) "ALL CHECKS PASSED" (str @failures " CHECK(S) FAILED"))))
 (js/process.exit (if (zero? @failures) 0 1))

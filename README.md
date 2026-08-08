@@ -87,10 +87,86 @@ lease (kotoba.fleet.lease)
             └─ gate → materialize (single writer) → receipt
 ```
 
+### Kotoba Capability Machine (KCM)
+
+The preferred execution profile is now the **Kotoba Capability Machine**. It
+is not a general-purpose VM with a CLI allowlist. A KCM is identified by the
+hash of one closed contract:
+
+```
+definition closure CID + compiler CID + module-lock CID + target ABI
+  + HostCaps policy CID + provider closure SHA-256 + Node runtime SHA-256
+  + declared Kotoba checks = KCM machine id
+```
+
+The model receives only typed code operations and `kotoba_check <id>`. It does
+not receive a shell, process-spawn tool, executable name, or argv. The host
+looks up the check id in the KCM contract and appends its fixed arguments to a
+verified provider entrypoint, without a shell. The provider bundle includes the
+compiler sources, the exact git-locked dependency closure, NBB, and its npm
+dependencies. A sorted manifest hashes every regular file; symlinks, extra
+files, missing files, a changed archive, or different Node runtime bytes fail
+closed before execution (including on a cache hit). PATH is never consulted,
+so another executable named `kotoba` cannot become the compiler. The governor
+recomputes the machine id and rejects a receipt from any other closure/policy.
+
+```edn
+{:machine :kotoba-capability-machine
+ :kcm/identity
+ {:definition-closure-cid "bafy..."
+  :compiler-cid "bafy..."
+  :module-lock-cid "bafy..."
+  :target-abi :wasm32-component-v1
+ :hostcaps-policy-cid "bafy..."
+  :provider-closure-sha256 "0123..."
+  :runtime-sha256 "4567..."
+  :effects []}
+ :kcm/provider
+ {:archive "/tmp/kotoba-provider.tar"
+  :manifest "/tmp/kotoba-provider.manifest.edn"
+  :archive-sha256 "89ab..."}
+ :kcm/capabilities #{:code/list :code/read :code/edit :build/check :build/compile}
+ :kcm/checks
+ [{:id :test
+   :args ["check" "src/main.kotoba"]
+   :pure? true}]
+ :kcm/builds
+ [{:id :wasm
+   :args ["compile" "src/main.kotoba" "--target" "wasm32-wasi"
+          "--output" "target/main.wasm"]}]}
+```
+
+Build and verify the provider without installing a system-wide CLI:
+
+```sh
+npm ci --ignore-scripts --omit=optional --prefix ../compiler
+nbb --classpath hosts/nbb scripts/build-kcm-provider.cljs \
+  --compiler ../compiler --out /tmp/kotoba-provider
+nbb scripts/kcm-coldstart-probe.cljs
+nbb scripts/kcm-node-probe.cljs --node naphtali
+```
+
+Pure checks use a cross-session cache keyed by KCM id plus patch digest. A
+compiler, dependency, ABI, policy, command, or code change therefore misses;
+renames that preserve the admitted definition closure can hit. Effectful KCM
+identities are forbidden from declaring a pure/cacheable check. Cache hit/miss
+counts and the KCM identity are included in the signed receipt.
+
+Declared compiles are exposed separately as `kotoba_build <id>`. They always
+execute because a result-only cache hit would not restore the produced artifact;
+the final authoritative checks still run independently before admission.
+
+Seatbelt remains an outer host containment layer, not the language security
+model. A container or microVM may replace that backing for high-risk tenants
+without changing the KCM contract or guest tool surface. Legacy sandbox specs
+remain accepted for migration, but they are reported as `:legacy-sandbox`.
+
 | piece | file | role |
 |---|---|---|
 | file-backed `:db-api` | `hosts/nbb/fleet/filestore.cljs` | the same append-only contract as `MemStore`, but shared by separate OS processes (ordinal assigned under a lock — the file analogue of `swap!`) |
-| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: ephemeral workdir from a pinned tarball, path-confined tools, one allowlisted test command under an OS-level exec backing, enforced budgets, emits a patch |
+| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: KCM typed tools (or the legacy allowlisted test command), exact no-shell Kotoba providers under an OS-level exec backing, enforced budgets, emits a patch |
+| KCM contract | `hosts/nbb/fleet/kcm.cljs` | canonical machine/cache identity, closed HostCaps vocabulary, check-argument validation |
+| KCM provider | `hosts/nbb/fleet/kcm_provider.cljs` | archive/runtime/manifest/tree verification and exact provider argv |
 | admission rules | `hosts/nbb/fleet/gate.cljs` | pure governor rules — lease holder, protected paths, green tests, **exec backing** |
 | dispatcher | `bin/fleet-sandbox-dispatch.cljs` | lease → remote run → proposal → gate → materialize → receipt |
 | the flow | `hosts/nbb/fleet/dispatch.cljs` | one work-unit end to end — shared by the interactive dispatcher and the tick, so they cannot drift |

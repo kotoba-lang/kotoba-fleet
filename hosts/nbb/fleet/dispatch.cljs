@@ -14,6 +14,7 @@
             [fleet.gate :as gate]
             [fleet.github :as gh]
             [fleet.identity :as fid]
+            [fleet.kcm :as kcm]
             [fleet.kotobase-store :as kbs]
             [fleet.filestore :as filestore]
             [fleet.node :as node]
@@ -74,20 +75,36 @@
   [{:keys [spec node-name agent-name state-dir tarball agent-src]}]
   (let [{:keys [model endpoint] :as resolved} (resolve-model)
         remote-root (str "/tmp/fleet-sandbox-" (:work-id spec))
-        remote-spec {:work-id (:work-id spec) :root remote-root
-                     :tarball (str remote-root "/repo.tgz")
-                     :prompt (:prompt spec) :test-cmd (:test-cmd spec)
-                     :endpoint endpoint :model model :budget (:budget spec)
-                     :exec-backing (get spec :exec-backing :sandbox-exec)}
+        provider (:kcm/provider spec)
+        remote-provider (when (kcm/kcm? spec)
+                          (assoc provider
+                                 :archive (str remote-root "/kotoba-provider.tar")
+                                 :manifest (str remote-root "/kotoba-provider.manifest.edn")))
+        remote-spec (merge
+                     (select-keys spec [:machine :kcm/identity :kcm/capabilities
+                                        :kcm/checks :kcm/builds :kcm/cache-root])
+                     (when remote-provider {:kcm/provider remote-provider})
+                     {:work-id (:work-id spec) :root remote-root
+                      :tarball (str remote-root "/repo.tgz")
+                      :prompt (:prompt spec) :test-cmd (:test-cmd spec)
+                      :endpoint endpoint :model model :budget (:budget spec)
+                      :exec-backing (get spec :exec-backing :sandbox-exec)})
         local-spec (path/join state-dir (str (:work-id spec) "-spec.edn"))
+        kcm-src (path/join (path/dirname agent-src) "kcm.cljs")
+        provider-src (path/join (path/dirname agent-src) "kcm_provider.cljs")
         started (now)]
     (cli/say (str "  model: " model
                   (when (:alias-for resolved) (str " → " (:alias-for resolved)))
                   " (" (name (:resolved resolved)) ")"))
     (fs/writeFileSync local-spec (pr-str remote-spec))
-    (node/ssh node-name (str "rm -rf " remote-root " && mkdir -p " remote-root))
+    (node/ssh node-name (str "rm -rf " remote-root " && mkdir -p " remote-root "/fleet"))
     (node/scp! node-name tarball (str remote-root "/repo.tgz"))
     (node/scp! node-name agent-src (str remote-root "/"))
+    (node/scp! node-name kcm-src (str remote-root "/fleet/kcm.cljs"))
+    (node/scp! node-name provider-src (str remote-root "/fleet/kcm_provider.cljs"))
+    (when remote-provider
+      (node/scp! node-name (:archive provider) (:archive remote-provider))
+      (node/scp! node-name (:manifest provider) (:manifest remote-provider)))
     (node/scp! node-name local-spec (str remote-root "/"))
     (cli/say (str "  running sandbox on " node-name ":" remote-root " …"))
     (let [{:keys [exit out]} (node/ssh node-name
@@ -101,6 +118,7 @@
       (when-not result
         (throw (ex-info (str "sandbox produced no result (exit " exit ")") {:out out})))
       (cli/say (str "  sandbox: backing=" (name (or (:exec-backing result) :?))
+                    " machine=" (name (or (:machine result) :?))
                     " blocked=" (count (get-in result [:exec-probe :blocked]))
                     "/" (+ (count (get-in result [:exec-probe :blocked]))
                            (count (get-in result [:exec-probe :leaked])))
@@ -229,6 +247,7 @@
                                             {:payload p :agent (:proposal/agent proposal)
                                              :holder (lease/holder db (:proposal/work proposal) (now))
                                              :pin (:pin spec) :protected-paths protected
+                                             :kcm-spec spec
                                              :allow-unsandboxed? (:allow-unsandboxed-exec spec)
                                              :patch-applies? applies?})]
                                     (if (seq rs)
@@ -280,6 +299,7 @@
   weather: a lost race, a node that is down, a rejected patch are all values)."
   [{:keys [spec agent-name identity db state-dir materialize publish? node-name
            settle-ms signoff-dids] :as opts}]
+  (when (kcm/kcm? spec) (kcm/validate! spec))
   (let [unit (:unit spec)
         protected (get spec :protected-paths default-protected)
         signoff-paths (get spec :signoff-paths default-signoff)

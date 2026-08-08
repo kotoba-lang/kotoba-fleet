@@ -41,6 +41,7 @@
     (str "  " (:node c) "  DOWN — " (:reason c))
     (str "  " (:node c)
          "  caps=" (str/join "," (sort (map name (:caps c))))
+         (when-let [sha (:runtime-sha256 c)] (str "  node-sha=" (subs sha 0 12)))
          "  exec=" (cond (:contains-exec c) (str "contained (" (count (get-in c [:exec-probe :blocked])) " blocked)")
                          (:exec-probe c) (str "LEAKS " (pr-str (get-in c [:exec-probe :leaked])))
                          :else "unprobed"))))
