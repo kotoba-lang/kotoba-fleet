@@ -35,7 +35,9 @@
             ["node:path" :as path]
             ["node:child_process" :as cp]
             [clojure.string :as str]
-            [cljs.reader :as reader]))
+            [cljs.reader :as reader]
+            [fleet.kcm :as kcm]
+            [fleet.kcm-provider :as kcm-provider]))
 
 ;; ---------------------------------------------------------------------------
 ;; spec
@@ -43,6 +45,7 @@
 (def argv (vec (.-argv js/process)))
 (def selftest? (boolean (some #{"--selftest"} argv)))
 (def exec-probe? (boolean (some #{"--exec-probe"} argv)))
+(def kcm-probe? (boolean (some #{"--kcm-probe"} argv)))
 (def spec
   (if (or selftest? exec-probe? (some #{"--ctx-probe"} argv))
     {:work-id "selftest" :root (fs/mkdtempSync "/tmp/fleet-sandbox-selftest-")
@@ -51,10 +54,14 @@
                 (throw (ex-info "usage: sandbox_agent.cljs --spec <spec.edn>" {})))]
       (reader/read-string (fs/readFileSync p "utf8")))))
 
+(def kcm-mode? (kcm/kcm? spec))
+(when kcm-mode? (kcm/validate! spec))
+
 (def root      (:root spec))
 (def work-dir  (path/join root "work"))
 (def tarball   (:tarball spec))
 (def test-cmd  (:test-cmd spec))
+(def cache-root (or (:kcm/cache-root spec) "/var/tmp/kotoba-kcm-cache-v1"))
 (def endpoint  (:endpoint spec))
 (def model     (:model spec))
 (def budget    (merge {:max-turns 10 :max-tool-calls 30 :max-tokens 1200
@@ -125,6 +132,12 @@
        "                   (literal \"/dev/urandom\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n"
        "(allow file-write* (regex #\"^/dev/fd/[0-9]+$\") (regex #\"^/dev/ttys[0-9]*$\"))\n"))
 
+(defn- backing-path [p]
+  ;; macOS presents /tmp and /var as symlinks into /private. Seatbelt compares
+  ;; canonical kernel paths, so a lexical /tmp/... parameter does not grant a
+  ;; write to the same directory resolved as /private/tmp/....
+  (try (fs/realpathSync p) (catch :default _ p)))
+
 (defn- install-backing! []
   (when (str/starts-with? root real-home)
     ;; the profile denies reads under the node's real home; a sandbox rooted
@@ -143,14 +156,40 @@
         [prog args] (case exec-backing
                       :sandbox-exec
                       ["sandbox-exec" ["-f" profile-path
-                                       "-D" (str "REAL_HOME=" real-home)
-                                       "-D" (str "WORK=" work-dir)
-                                       "-D" (str "SBHOME=" sandbox-home)
-                                       "-D" (str "SBTMP=" sandbox-tmp)
+                                       "-D" (str "REAL_HOME=" (backing-path real-home))
+                                       "-D" (str "WORK=" (backing-path work-dir))
+                                       "-D" (str "SBHOME=" (backing-path sandbox-home))
+                                       "-D" (str "SBTMP=" (backing-path sandbox-tmp))
                                        "sh" "-c" cmd]]
                       ;; explicit, recorded in the payload, and rejected by the
                       ;; dispatcher's gate unless the work-unit opts in
                       :none ["sh" ["-c" cmd]]
+                      (throw (ex-info (str "unknown :exec-backing " exec-backing) {})))]
+    (try {:exit 0 :out (sh prog args {:cwd work-dir :env env
+                                      :timeout (or timeout-ms 300000)
+                                      :stdio ["ignore" "pipe" "pipe"]})}
+         (catch :default e
+           {:exit (or (.-status e) 1)
+            :out (str (some-> (.-stdout e) str) "\n" (some-> (.-stderr e) str))}))))
+
+(defn exec-argv!
+  "Run one exact argv vector under the backing, with no shell parsing.  KCM
+  providers use this path exclusively: the executable and every argument were
+  committed into the machine identity before the model ran."
+  [argv {:keys [timeout-ms]}]
+  (let [env (js/Object.assign #js {} js/process.env
+                              #js {"HOME" sandbox-home "TMPDIR" sandbox-tmp})
+        [cmd & cmd-args] argv
+        [prog args] (case exec-backing
+                      :sandbox-exec
+                      ["sandbox-exec" (concat ["-f" profile-path
+                                                "-D" (str "REAL_HOME=" (backing-path real-home))
+                                                "-D" (str "WORK=" (backing-path work-dir))
+                                                "-D" (str "SBHOME=" (backing-path sandbox-home))
+                                                "-D" (str "SBTMP=" (backing-path sandbox-tmp))
+                                                cmd]
+                                               cmd-args)]
+                      :none [cmd cmd-args]
                       (throw (ex-info (str "unknown :exec-backing " exec-backing) {})))]
     (try {:exit 0 :out (sh prog args {:cwd work-dir :env env
                                       :timeout (or timeout-ms 300000)
@@ -242,6 +281,14 @@
 (def tool-calls (atom 0))
 (def model-errors (atom 0))
 (def test-runs (atom []))
+(def kotoba-provider (atom nil))
+
+(defn- resolve-kotoba-provider! []
+  (if-let [prepared @kotoba-provider]
+    (kcm-provider/verify-prepared! spec prepared)
+    (let [prepared (kcm-provider/prepare! spec root)]
+      (reset! kotoba-provider prepared)
+      prepared)))
 
 (defn- t-list-files [_]
   (->> (sh "git" ["-C" work-dir "ls-files"] {})
@@ -311,6 +358,70 @@
     (swap! test-runs conj {:exit (:exit res) :ms (- (js/Date.now) started) :tail tail})
     (str "exit=" (:exit res) "\n" tail)))
 
+(defn- current-patch []
+  ;; Include untracked files without permitting hooks to execute.
+  (sh "git" ["-C" work-dir "-c" "core.hooksPath=/dev/null" "add" "-A"] {})
+  (sh "git" ["-C" work-dir "-c" "core.hooksPath=/dev/null"
+             "diff" "--binary" "HEAD"] {}))
+
+(defn- cache-path [key]
+  (path/join cache-root (str/replace key #"^sha256:" "") ".edn"))
+
+(defn- run-kcm-check!
+  "Execute one declared Kotoba provider.  The model chooses only an id; argv is
+  read from the signed/content-addressed machine contract.  Pure checks use a
+  cross-session cache keyed by machine identity plus the exact patch."
+  [check]
+  (let [patch (current-patch)
+        key (kcm/cache-key spec check patch)
+        p (cache-path key)
+        started (js/Date.now)
+        ;; Verify the provider even on a cache hit. Otherwise a substituted
+        ;; binary could inherit a receipt that claims the declared digest merely
+        ;; because an older correct provider populated this host cache.
+        provider (resolve-kotoba-provider!)
+        cached (when (and (:pure? check) (fs/existsSync p))
+                 (reader/read-string (fs/readFileSync p "utf8")))
+        result (or cached
+                   (let [argv (into (:argv-prefix provider) (:args check))
+                         r (exec-argv! argv
+                                       {:timeout-ms (:test-timeout-ms budget)})
+                         value {:exit (:exit r)
+                                :tail (->> (str/split-lines (str (:out r)))
+                                           (take-last 25) (str/join "\n"))}]
+                     (when (:pure? check)
+                       (fs/mkdirSync (path/dirname p) #js {:recursive true})
+                       (fs/writeFileSync p (pr-str value)))
+                     value))
+        record (assoc result
+                      :id (:id check)
+                      :cache (if cached :hit :miss)
+                      :cache-key key
+                      :ms (- (js/Date.now) started))]
+    (swap! test-runs conj record)
+    (str "check=" (name (:id check))
+         " exit=" (:exit record)
+         " cache=" (name (:cache record)) "\n" (:tail record))))
+
+(defn- t-kotoba-check [{:strs [id]}]
+  (run-kcm-check! (kcm/check-by-id spec id)))
+
+(defn- run-kcm-build! [build]
+  (let [provider (resolve-kotoba-provider!)
+        started (js/Date.now)
+        result (exec-argv! (into (:argv-prefix provider) (:args build))
+                           {:timeout-ms (:test-timeout-ms budget)})
+        record {:id (:id build) :exit (:exit result) :cache :disabled
+                :ms (- (js/Date.now) started)
+                :tail (->> (str/split-lines (str (:out result)))
+                           (take-last 25) (str/join "\n"))}]
+    (swap! test-runs conj record)
+    (str "build=" (name (:id build)) " exit=" (:exit record)
+         " cache=disabled\n" (:tail record))))
+
+(defn- t-kotoba-build [{:strs [id]}]
+  (run-kcm-build! (kcm/build-by-id spec id)))
+
 ;; The test command is the ONE command the agent can reach, it is supplied by
 ;; the dispatcher (never by the model), and it runs under the exec backing —
 ;; so code the agent writes into the test suite is contained too.
@@ -320,10 +431,12 @@
    "write_file" t-write-file
    "append_file" t-append-file
    "edit_file"  t-edit-file
-   "run_tests"  t-run-tests})
+   "run_tests"  t-run-tests
+   "kotoba_check" t-kotoba-check
+   "kotoba_build" t-kotoba-build})
 
-(def tool-schema
-  #js [#js {:type "function"
+(def all-tool-schema
+  [#js {:type "function"
             :function #js {:name "list_files"
                            :description "List the files tracked in the repository."
                            :parameters #js {:type "object" :properties #js {}}}}
@@ -358,14 +471,45 @@
        #js {:type "function"
             :function #js {:name "run_tests"
                            :description "Run the repository's test suite. Returns the exit code and output tail."
-                           :parameters #js {:type "object" :properties #js {}}}}])
+                           :parameters #js {:type "object" :properties #js {}}}}
+       #js {:type "function"
+            :function #js {:name "kotoba_check"
+                           :description "Run one declared Kotoba check by id. No executable or arguments can be supplied."
+                           :parameters #js {:type "object"
+                                            :properties #js {:id #js {:type "string"}}
+                                            :required #js ["id"]}}}
+       #js {:type "function"
+            :function #js {:name "kotoba_build"
+                           :description "Run one declared Kotoba compile by id. Build results are not cached."
+                           :parameters #js {:type "object"
+                                            :properties #js {:id #js {:type "string"}}
+                                            :required #js ["id"]}}}])
+
+(def active-tool-names
+  (if kcm-mode? (kcm/tool-names spec) (set (keys tools))))
+
+(def active-tools (select-keys tools active-tool-names))
+
+(def tool-schema
+  (clj->js
+   (filterv #(contains? active-tool-names (.. % -function -name)) all-tool-schema)))
 
 ;; ---------------------------------------------------------------------------
 ;; 3. ReAct loop against the murakumo fleet model
 
 (def system-prompt
-  (str "You are a coding agent working inside an isolated sandbox on one checkout "
+  (str "You are a coding agent working inside "
+       (if kcm-mode? "a Kotoba Capability Machine" "an isolated sandbox")
+       " on one checkout "
        "of a repository. Rules:\n"
+       (when kcm-mode?
+         (str "- This machine exposes typed Kotoba capabilities only. There is no shell, "
+              "process tool, or arbitrary command execution. Use kotoba_check with one of: "
+              (str/join ", " (map (comp name :id) (:kcm/checks spec))) "."
+              (when (seq (:kcm/builds spec))
+                (str " Use kotoba_build with one of: "
+                     (str/join ", " (map (comp name :id) (:kcm/builds spec))) "."))
+              "\n"))
        "- Use the tools; never claim an edit you did not actually make.\n"
        "- To change an EXISTING file use edit_file with a short unique anchor. "
        "Do not rewrite whole files: unrelated reformatting will get your patch "
@@ -374,7 +518,9 @@
        "4000 bytes — build a longer file with write_file then append_file.\n"
        "- Make the smallest change that satisfies the task. Do not reformat or "
        "refactor unrelated code.\n"
-       "- Run run_tests after editing. If it fails, fix and re-run.\n"
+       (if kcm-mode?
+         "- Run every declared kotoba_check after editing. If one fails, fix and re-run.\n"
+         "- Run run_tests after editing. If it fails, fix and re-run.\n")
        "- When the tests pass, reply with a one-paragraph summary and STOP. Do "
        "not keep editing after green.\n"
        "- Keep reasoning short."))
@@ -482,12 +628,12 @@
                                 (>= @tool-calls (:max-tool-calls budget))
                                 "ERROR: tool-call budget exhausted; summarize and stop."
 
-                                (not (contains? tools fname))
+                                (not (contains? active-tools fname))
                                 (str "ERROR: no such tool: " fname)
 
                                 :else
                                 (do (swap! tool-calls inc)
-                                    (try ((get tools fname) args)
+                                    (try ((get active-tools fname) args)
                                          (catch :default e (str "ERROR: " (.-message e))))))]
                       (log "  tool" fname (str "-> " (count (str out)) "B"))
                       (.push messages #js {:role "tool"
@@ -528,13 +674,20 @@
   (install-backing!)
   (let [probe (verify-backing!)      ; throws before any model call if it leaks
         outcome (try (run-loop!) (catch :default e {:stop :error :error (.-message e) :turns 0}))
-        ;; a final authoritative test run — the gate must not trust the model's
-        ;; word that it went green
-        final-test (t-run-tests {})
+        ;; A final authoritative check pass — the gate must not trust the
+        ;; model's word that it went green. KCM runs every declared provider;
+        ;; legacy mode retains its single allowlisted test command.
+        final-test (if kcm-mode?
+                     (str/join "\n" (map run-kcm-check! (:kcm/checks spec)))
+                     (t-run-tests {}))
         diff (patch!)
         result {:work-id (:work-id spec)
                 :node (str/trim (sh "hostname" [] {}))
                 :model model
+                :machine (if kcm-mode? :kotoba-capability-machine :legacy-sandbox)
+                :machine-id (when kcm-mode? (kcm/machine-id spec))
+                :kcm-contract (when kcm-mode? kcm/contract-version)
+                :kcm-capabilities (when kcm-mode? (set (:kcm/capabilities spec)))
                 :exec-backing exec-backing
                 :exec-probe probe
                 :stop (:stop outcome)
@@ -544,13 +697,16 @@
                 :model-errors @model-errors
                 :summary (:final outcome)
                 :tests {:runs (count @test-runs)
-                        :final-exit (:exit (last @test-runs))
+                        :final-exit (apply max 0 (map :exit @test-runs))
                         :final-tail (:tail (last @test-runs))}
+                :cache {:hits (count (filter #(= :hit (:cache %)) @test-runs))
+                        :misses (count (filter #(= :miss (:cache %)) @test-runs))}
                 :diff diff}]
     (println "===FLEET-RESULT-BEGIN===")
     (println (pr-str result))
     (println "===FLEET-RESULT-END===")
-    (log "sandbox done:" (:stop outcome) "tests-exit=" (:exit (last @test-runs))
+    (log "sandbox done:" (:stop outcome) "tests-exit="
+         (apply max 0 (map :exit @test-runs))
          "diff-bytes=" (count diff))
     (when (str/blank? final-test) nil)))
 
@@ -582,8 +738,36 @@
   (install-backing!)
   (println (pr-str (probe-backing))))
 
+(defn -kcm-probe
+  "Cold/warm path probe without a model call. Runs the declared pure checks
+  twice against the same KCM input and reports cache miss/hit evidence."
+  []
+  (when-not kcm-mode?
+    (throw (ex-info "--kcm-probe requires a KCM spec" {})))
+  (extract!)
+  (install-backing!)
+  (let [backing (verify-backing!)
+        first-pass (mapv (fn [c]
+                           (run-kcm-check! c)
+                           (last @test-runs))
+                         (:kcm/checks spec))
+        second-pass (mapv (fn [c]
+                            (run-kcm-check! c)
+                            (last @test-runs))
+                          (:kcm/checks spec))
+        builds (mapv (fn [b]
+                       (run-kcm-build! b)
+                       (last @test-runs))
+                     (:kcm/builds spec))]
+    (println (pr-str {:machine-id (kcm/machine-id spec)
+                      :backing backing
+                      :first first-pass
+                      :second second-pass
+                      :builds builds}))))
+
 (cond
   (some #{"--ctx-probe"} argv) (-ctx-probe)
   exec-probe? (-exec-probe)
+  kcm-probe? (-kcm-probe)
   selftest?   (-selftest)
   :else       (-main))

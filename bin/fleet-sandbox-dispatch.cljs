@@ -82,6 +82,7 @@
                                       (node/inventory {:nodes (cli/opt "--nodes" nil)
                                                        :fleet-edn (cli/opt "--fleet-edn" nil)}))
                            {:keys [node why]} (node/choose caps {:requires (set (get spec :requires [:nbb :git]))
+                                                                 :runtime-sha256 (get-in spec [:kcm/identity :runtime-sha256])
                                                                  :allow-unsandboxed? (:allow-unsandboxed-exec spec)})]
                        (when-not node (cli/say (str "  no eligible node: " why)))
                        node)

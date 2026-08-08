@@ -63,6 +63,7 @@
         (mapv (fn [spec]
                 (cli/say (str "\n— " (:work-id spec) " (" (:unit spec) ")"))
                 (let [{:keys [node why]} (node/choose caps {:requires (set (get spec :requires [:nbb :git]))
+                                                            :runtime-sha256 (get-in spec [:kcm/identity :runtime-sha256])
                                                             :allow-unsandboxed? (:allow-unsandboxed-exec spec)})]
                   (cond
                     (and (not node) (:node spec)) {:work-id (:work-id spec) :status :no-eligible-node :why why}

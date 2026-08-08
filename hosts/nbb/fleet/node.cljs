@@ -13,7 +13,8 @@
   runs the sandbox agent's own containment probe there — a node that cannot
   contain agent-authored code is not eligible for agent work, however much
   toolchain it has."
-  (:require [clojure.string :as str]
+  (:require ["node:path" :as path]
+            [clojure.string :as str]
             [cljs.reader :as reader]
             [fleet.cli :as cli]))
 
@@ -36,23 +37,38 @@
                                           "command -v nbb >/dev/null && echo has:nbb; "
                                           "command -v node >/dev/null && echo has:node; "
                                           "command -v git >/dev/null && echo has:git; "
+                                          "command -v kotoba >/dev/null && echo has:kotoba; "
                                           "command -v clojure >/dev/null && echo has:clojure; "
                                           "ls /opt/homebrew/opt/openjdk/bin/java >/dev/null 2>&1 && echo has:jdk; "
-                                          "ls /usr/bin/sandbox-exec >/dev/null 2>&1 && echo has:sandbox-exec")
+                                          "ls /usr/bin/sandbox-exec >/dev/null 2>&1 && echo has:sandbox-exec; "
+                                          "p=$(node -p 'process.execPath' 2>/dev/null) && "
+                                          "echo runtime-path:$p && echo runtime-sha256:$(shasum -a 256 \"$p\" | awk '{print $1}')")
                               {:timeout-sec 40})]
     (if-not (zero? exit)
       {:node node :up false :reason (str/trim (str out))}
       (let [caps (set (keep #(second (re-find #"^has:(.+)$" %)) (str/split-lines out)))
+            runtime-path (some #(second (re-find #"^runtime-path:(.+)$" %))
+                               (str/split-lines out))
+            runtime-sha256 (some #(second (re-find #"^runtime-sha256:(.+)$" %))
+                                  (str/split-lines out))
             base {:node node :up true
                   :hostname (first (str/split-lines out))
+                  :runtime-path runtime-path :runtime-sha256 runtime-sha256
                   :caps (into #{} (map keyword caps))}]
         (if-not (and deep? agent-path (contains? caps "nbb"))
           base
           ;; the containment probe: ship the sandbox agent and ask the node to
           ;; try the escapes itself
-          (let [remote (str "/tmp/fleet-probe-" (.-pid js/process) ".cljs")
-                _ (try (scp! node agent-path remote) (catch :default _ nil))
-                {:keys [exit out]} (ssh node (str "cd /tmp && nbb " remote " --exec-probe; rm -f " remote)
+          (let [remote-root (str "/tmp/fleet-probe-" (.-pid js/process))
+                remote (str remote-root "/sandbox_agent.cljs")
+                kcm-path (path/join (path/dirname agent-path) "kcm.cljs")
+                provider-path (path/join (path/dirname agent-path) "kcm_provider.cljs")
+                _ (ssh node (str "rm -rf " remote-root " && mkdir -p " remote-root "/fleet"))
+                _ (try (do (scp! node agent-path remote)
+                           (scp! node kcm-path (str remote-root "/fleet/kcm.cljs"))
+                           (scp! node provider-path (str remote-root "/fleet/kcm_provider.cljs")))
+                       (catch :default _ nil))
+                {:keys [exit out]} (ssh node (str "cd " remote-root " && nbb sandbox_agent.cljs --exec-probe; rm -rf " remote-root)
                                         {:timeout-sec 180})
                 result (when (zero? exit)
                          (try (reader/read-string (str/trim (last (remove str/blank? (str/split-lines out)))))
@@ -64,9 +80,10 @@
 (defn eligible?
   "Does `cap` satisfy `requires` (a set of capability keywords)? Containment is
   required unless the work-unit explicitly opted out of sandboxed exec."
-  [cap {:keys [requires allow-unsandboxed?]}]
+  [cap {:keys [requires allow-unsandboxed? runtime-sha256]}]
   (and (:up cap)
        (every? (:caps cap) requires)
+       (or (nil? runtime-sha256) (= runtime-sha256 (:runtime-sha256 cap)))
        (or allow-unsandboxed? (:contains-exec cap))))
 
 (defn choose
@@ -78,6 +95,7 @@
     {:node nil
      :why (str "no node satisfies " (pr-str (:requires req))
                (when-not (:allow-unsandboxed? req) " + contained exec")
+               (when-let [sha (:runtime-sha256 req)] (str " + Node sha256:" (subs sha 0 12)))
                "; probed: "
                (str/join ", " (map (fn [c]
                                      (str (:node c)

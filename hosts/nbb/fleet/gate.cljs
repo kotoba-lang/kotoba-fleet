@@ -8,7 +8,8 @@
   not asserted on the node**: a payload that ran with the exec backing disabled,
   or whose own startup probe leaked, is rejected even when its tests are green.
   Opting out is a property of the work-unit, never of the runtime."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [fleet.kcm :as kcm]))
 
 (defn diff-files
   "Paths touched by a unified diff (from its `diff --git a/… b/…` headers)."
@@ -30,7 +31,8 @@
     :allow-unsandboxed? work-unit opt-out for :exec-backing != :sandbox-exec
     :patch-applies?     true iff the patch applies to the pinned tree (nil when
                         the caller had no pinned tree to check against)"
-  [{:keys [payload agent holder pin protected-paths allow-unsandboxed? patch-applies?]}]
+  [{:keys [payload agent holder pin protected-paths allow-unsandboxed? patch-applies?
+           kcm-spec]}]
   (let [p payload
         files (diff-files (:diff p))
         leaked (get-in p [:exec-probe :leaked])]
@@ -61,4 +63,16 @@
       (nil? patch-applies?) (conj "no pinned tree to verify the patch against")
 
       (false? patch-applies?)
-      (conj "patch does not apply cleanly to the pinned tree"))))
+      (conj "patch does not apply cleanly to the pinned tree")
+
+      (and (kcm/kcm? kcm-spec)
+           (not= :kotoba-capability-machine (:machine p)))
+      (conj "KCM work ran outside the Kotoba Capability Machine")
+
+      (and (kcm/kcm? kcm-spec)
+           (not= (kcm/machine-id kcm-spec) (:machine-id p)))
+      (conj "KCM machine identity does not match the dispatched closure/policy")
+
+      (and (kcm/kcm? kcm-spec)
+           (not= kcm/contract-version (:kcm-contract p)))
+      (conj "KCM contract version does not match"))))

@@ -1,0 +1,121 @@
+#!/usr/bin/env nbb
+(ns build-kcm-provider
+  "Build a self-contained, content-addressed Kotoba compiler provider.
+
+  Usage: nbb --classpath hosts/nbb scripts/build-kcm-provider.cljs
+           --compiler ../compiler --out /tmp/kotoba-provider
+
+  The checked-in dependency lock is the authority. Each dependency checkout is
+  verified at its exact git SHA and only tracked files under the locked paths
+  are copied. The output archive is transport; the stable closure digest comes
+  from the sorted file manifest."
+  (:require ["node:child_process" :as cp]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]
+            [cljs.reader :as reader]
+            [clojure.string :as str]
+            [fleet.kcm :as kcm]
+            [fleet.kcm-provider :as provider]))
+
+(def args (vec *command-line-args*))
+(defn opt [flag default]
+  (or (second (drop-while #(not= flag %) args)) default))
+(def compiler (path/resolve (opt "--compiler" "../compiler")))
+(def out-prefix (path/resolve (opt "--out" "./build/kotoba-provider")))
+(def staging (fs/mkdtempSync (path/join (os/tmpdir) "kcm-provider-build-")))
+(def gitlibs (or (.-GITLIBS js/process.env) (path/join (os/homedir) ".gitlibs")))
+
+(defn sh [cmd argv opts]
+  (cp/execFileSync cmd (clj->js (if (= cmd "git")
+                                  (into ["-c" "core.fsmonitor=false"] argv)
+                                  argv))
+                   (clj->js (merge {:encoding "utf8" :maxBuffer 33554432} opts))))
+
+(defn copy-tree! [from to]
+  (when-not (fs/existsSync from)
+    (throw (ex-info (str "missing provider input " from) {:path from})))
+  (fs/cpSync from to #js {:recursive true :dereference true}))
+
+(defn copy-tracked! [repo locked-path destination]
+  (let [raw (sh "git" ["-C" repo "ls-files" "-z" "--" locked-path] {})
+        files (remove str/blank? (str/split raw #"\u0000"))]
+    (when (empty? files)
+      (throw (ex-info "locked dependency path has no tracked files"
+                      {:repo repo :path locked-path})))
+    (doseq [relative files]
+      (let [source (path/join repo relative)
+            target (path/join destination relative)]
+        (fs/mkdirSync (path/dirname target) #js {:recursive true})
+        (fs/copyFileSync source target)))))
+
+(defn all-files [root]
+  (letfn [(walk [dir]
+            (mapcat
+             (fn [entry]
+               (let [p (path/join dir (.-name entry))]
+                 (cond
+                   (.isDirectory entry) (walk p)
+                   (.isFile entry) [p]
+                   :else (throw (ex-info "provider inputs must be regular files"
+                                         {:path p})))) )
+             (array-seq (fs/readdirSync dir #js {:withFileTypes true}))))]
+    (sort (walk root))))
+
+(let [lock-path (path/join compiler "deps-lock.edn")
+      lock (reader/read-string (fs/readFileSync lock-path "utf8"))
+      deps-digest (provider/file-sha256 (path/join compiler "deps.edn"))]
+  (when-not (= deps-digest (:lock/deps-digest lock))
+    (throw (ex-info "compiler dependency lock is stale"
+                    {:expected (:lock/deps-digest lock) :actual deps-digest})))
+  (copy-tree! (path/join compiler "src") (path/join staging "compiler/src"))
+  (copy-tree! (path/join compiler "resources") (path/join staging "compiler/resources"))
+  (doseq [package ["nbb" "import-meta-resolve" "@noble/hashes"]]
+    (copy-tree! (path/join compiler "node_modules" package)
+                (path/join staging "node_modules" package)))
+  (let [classpath
+        (into ["compiler/src" "compiler/resources"]
+              (mapcat
+               (fn [{:keys [coordinate git-sha paths]}]
+                 (let [[group artifact] (str/split coordinate #"/")
+                       checkout (path/join gitlibs "libs" group artifact git-sha)
+                       actual (str/trim (sh "git" ["-C" checkout "rev-parse" "HEAD"] {}))
+                       target-root (str "deps/" group "/" artifact "/" git-sha)]
+                   (when-not (= git-sha actual)
+                     (throw (ex-info "dependency checkout SHA mismatch"
+                                     {:coordinate coordinate :expected git-sha :actual actual})))
+                   (doseq [locked-path paths]
+                     (copy-tracked! checkout locked-path (path/join staging target-root)))
+                   (mapv #(if (= "." %) target-root (str target-root "/" %)) paths)))
+               (:lock/entries lock)))
+        revision (str/trim (sh "git" ["-C" compiler "rev-parse" "HEAD"] {}))
+        files (mapv (fn [p]
+                      (let [relative (str/replace (path/relative staging p) #"\\" "/")
+                            stat (fs/statSync p)]
+                        {:path relative :size (.-size stat)
+                         :sha256 (provider/file-sha256 p)}))
+                    (all-files staging))
+        manifest {:format provider/manifest-format
+                  :compiler-revision revision
+                  :module-lock-sha256 (provider/file-sha256 lock-path)
+                  :entry {:nbb-cli "node_modules/nbb/cli.js"
+                          :classpath (vec classpath)
+                          :main "compiler/src/kotoba/compiler/nbb/cli.cljs"}
+                  :files files}
+        closure (provider/closure-sha256 manifest)
+        archive (str out-prefix ".tar")
+        manifest-path (str out-prefix ".manifest.edn")]
+    (fs/mkdirSync (path/dirname out-prefix) #js {:recursive true})
+    (fs/writeFileSync manifest-path (str (pr-str manifest) "\n"))
+    (sh "tar" ["cf" archive "-C" staging "."] {})
+    (let [result {:format :kotoba-provider-build/v1
+                  :archive archive
+                  :archive-sha256 (provider/file-sha256 archive)
+                  :manifest manifest-path
+                  :provider-closure-sha256 closure
+                  :compiler-cid (str "git:" revision)
+                  :module-lock-cid (str "sha256:" (:module-lock-sha256 manifest))
+                  :runtime-sha256 (provider/file-sha256 js/process.execPath)
+                  :files (count files)
+                  :bytes (reduce + (map :size files))}]
+      (println (pr-str result)))))
