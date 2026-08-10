@@ -146,6 +146,26 @@ nbb scripts/kcm-coldstart-probe.cljs
 nbb scripts/kcm-node-probe.cljs --node naphtali
 ```
 
+For a first customer evaluation, the repository, compiler checkout, and an
+explicit policy are enough. The evaluator hashes the complete source closure,
+builds and verifies the pinned compiler provider, proves host containment,
+runs every declared check twice (cold miss or prior hit, then a verified hit),
+runs declared builds, and emits one content-addressed EDN report:
+
+```sh
+nbb --classpath hosts/nbb bin/kcm-evaluate.cljs \
+  --repo examples/kcm-evaluate \
+  --policy examples/kcm-evaluate/policy.edn \
+  --compiler ../compiler \
+  --out build/kcm-evaluation.edn
+```
+
+The report is `:accepted` only when all checks and builds exit zero and all six
+containment probes are blocked. Policies can select only the closed KCM
+capability vocabulary; absolute paths, home paths, parent traversal, shell or
+process capabilities, substituted provider bytes, and a different Node runtime
+fail closed. The evaluator does not call a model or require fleet credentials.
+
 Pure checks use a cross-session cache keyed by KCM id plus patch digest. A
 compiler, dependency, ABI, policy, command, or code change therefore misses;
 renames that preserve the admitted definition closure can hit. Effectful KCM

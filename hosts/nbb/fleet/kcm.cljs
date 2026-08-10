@@ -48,6 +48,22 @@
       (.update x)
       (.digest "hex")))
 
+(defn confined-arg?
+  "True when a declared compiler argument cannot name a path outside the KCM
+  workspace. Flags and ordinary values remain valid; absolute paths, home
+  shortcuts, NUL bytes, and parent traversal are rejected even after `=` (for
+  example `--output=/tmp/x`)."
+  [x]
+  (let [parts (when (string? x) (str/split x #"="))]
+    (boolean
+     (and (string? x)
+          (not (str/includes? x "\u0000"))
+          (every?
+           (fn [part]
+             (and (not (re-find #"^(?:/|\\|~(?:/|\\)|[A-Za-z]:[\\/])" part))
+                  (not-any? #{".."} (str/split part #"[\\/]"))))
+           parts)))))
+
 (defn validation-reasons
   "Fail-closed validation for a KCM work-unit. A check stores only arguments
   for the content-addressed provider. The executable, NBB entrypoint and
@@ -103,14 +119,14 @@
                  (not (vector? (:args %)))
                  (empty? (:args %))
                  (not= "check" (first (:args %)))
-                 (some (complement string?) (:args %))) checks)
+                 (some (complement confined-arg?) (:args %))) checks)
       (conj "every KCM check must have an id and args beginning with check")
 
       (some #(or (nil? (:id %))
                  (not (vector? (:args %)))
                  (empty? (:args %))
                  (not= "compile" (first (:args %)))
-                 (some (complement string?) (:args %))) builds)
+                 (some (complement confined-arg?) (:args %))) builds)
       (conj "every KCM build must have an id and args beginning with compile")
 
       (not= (count builds) (count (distinct (map :id builds))))

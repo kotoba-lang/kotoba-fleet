@@ -1,0 +1,83 @@
+#!/usr/bin/env nbb
+(ns kcm-evaluate
+  "Evaluate a source tree under an explicit KCM policy and emit an auditable
+  EDN report. This is the local, no-model customer entrypoint."
+  (:require ["node:child_process" :as cp]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]
+            [cljs.reader :as reader]
+            [clojure.string :as str]
+            [fleet.kcm-evaluate :as evaluate]))
+
+(def args (vec *command-line-args*))
+(def temp-root (atom nil))
+(defn opt [flag default] (or (second (drop-while #(not= flag %) args)) default))
+(defn required [flag]
+  (or (opt flag nil) (throw (ex-info (str "missing " flag) {:usage true}))))
+
+(defn run [cmd argv opts]
+  (cp/execFileSync cmd (clj->js argv)
+                   (clj->js (merge {:encoding "utf8" :maxBuffer 33554432} opts))))
+
+(defn emit! [report out]
+  (let [s (str (pr-str report) "\n")]
+    (when out
+      (fs/mkdirSync (path/dirname (path/resolve out)) #js {:recursive true})
+      (fs/writeFileSync (path/resolve out) s))
+    (print s)))
+
+(defn main []
+  (when (some #{"--help" "-h"} args)
+    (println "usage: nbb --classpath hosts/nbb bin/kcm-evaluate.cljs --repo DIR --policy POLICY.edn --compiler COMPILER_DIR [--out REPORT.edn] [--cache DIR]")
+    (js/process.exit 0))
+  (let [repo (path/resolve (required "--repo"))
+        compiler (path/resolve (required "--compiler"))
+        policy-path (path/resolve (required "--policy"))
+        out (opt "--out" nil)
+        tmp (fs/mkdtempSync (path/join (os/tmpdir) "kcm-evaluate-"))
+        _ (reset! temp-root tmp)
+        source-stage (path/join tmp "source")
+        tarball (path/join tmp "source.tgz")
+        provider-prefix (path/join tmp "provider")
+        spec-path (path/join tmp "spec.edn")
+        policy (-> (fs/readFileSync policy-path "utf8") reader/read-string
+                   evaluate/validate-policy!)
+        closure (evaluate/source-closure repo)]
+    (evaluate/copy-closure! closure source-stage)
+    (run "tar" ["czf" tarball "-C" tmp "source"] {})
+    (let [provider-build
+          (-> (run "nbb" ["--classpath" "hosts/nbb"
+                           "scripts/build-kcm-provider.cljs"
+                           "--compiler" compiler "--out" provider-prefix] {})
+              str/split-lines last reader/read-string)
+          spec (evaluate/complete-spec
+                 {:policy policy :closure closure :provider-build provider-build
+                 :root (path/join tmp "sandbox") :tarball tarball
+                 :cache-root (path/resolve
+                              (opt "--cache"
+                                   (path/join (or (.-XDG_CACHE_HOME js/process.env)
+                                                 (path/join (os/homedir) ".cache"))
+                                              "kotoba-kcm")))})
+          _ (fs/writeFileSync spec-path (pr-str spec))
+          raw (run "nbb" ["--classpath" "hosts/nbb"
+                          "hosts/nbb/fleet/sandbox_agent.cljs"
+                          "--spec" spec-path "--kcm-probe"] {})
+          result (reader/read-string (last (str/split-lines raw)))
+          report (evaluate/evaluation-report
+                  {:policy policy :closure closure
+                   :provider-build provider-build :result result})]
+      (emit! report out)
+      (when-not (= :accepted (:decision report)) (set! (.-exitCode js/process) 2)))))
+
+(try
+  (main)
+  (catch :default e
+    (emit! (evaluate/with-report-cid
+            {:format evaluate/report-format :decision :rejected
+             :reason (.-message e) :reasons (some-> (ex-data e) :reasons)})
+           (opt "--out" nil))
+    (set! (.-exitCode js/process) (if (:usage (ex-data e)) 64 2)))
+  (finally
+    (when @temp-root
+      (fs/rmSync @temp-root #js {:recursive true :force true}))))
