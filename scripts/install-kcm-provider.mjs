@@ -129,11 +129,18 @@ function safeExtract(archive, destination) {
   if (extracted.status !== 0) fail(`cannot extract provider archive: ${extracted.stderr}`);
 }
 
-function launcherSource(root) {
-  return `#!/usr/bin/env node\n` +
-    `import fs from "node:fs"; import path from "node:path"; import process from "node:process"; import {spawnSync} from "node:child_process";\n` +
-    `const root=${JSON.stringify(root)}; const current=JSON.parse(fs.readFileSync(path.join(root,"current.json"),"utf8")); const runtime=current["runtime-root"];\n` +
-    `const r=spawnSync(process.execPath,["--stack-size=4096",path.join(runtime,"node_modules/nbb/cli.js"),"--classpath",path.join(runtime,"runner/hosts/nbb"),path.join(runtime,"runner/bin/kcm-evaluate.cljs"),"--provider",path.join(root,"current.json"),...process.argv.slice(2)],{stdio:"inherit"}); process.exit(r.status ?? 1);\n`;
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function launcherSource(root, script, injected = []) {
+  const words = injected.map((word) => shellQuote(word)).join(" ");
+  return `#!/bin/sh\n` +
+    `root=${shellQuote(root)}\n` +
+    `exec "$root/current/runtime/runtime/bin/node" --stack-size=4096 ` +
+    `"$root/current/runtime/node_modules/nbb/cli.js" --classpath ` +
+    `"$root/current/runtime/runner/hosts/nbb" ` +
+    `"$root/current/runtime/runner/bin/${script}"${words ? ` ${words}` : ""} "$@"\n`;
 }
 
 async function main() {
@@ -145,10 +152,6 @@ async function main() {
   if (!descriptorLocation) fail("missing --descriptor");
   const root = path.resolve(opt("--install", path.join(os.homedir(), ".local", "share", "kotoba-kcm")));
   const descriptor = verifyDescriptor(JSON.parse((await readResource(descriptorLocation)).toString("utf8")));
-  const runtimeDigest = sha256(fs.readFileSync(process.execPath));
-  if (runtimeDigest !== descriptor.provider.runtimeSha256) {
-    fail(`Node runtime digest mismatch: release requires ${descriptor.provider.runtimeSha256}, host is ${runtimeDigest}`);
-  }
   const closure = descriptor.provider.providerClosureSha256;
   if (!/^[0-9a-f]{64}$/.test(closure)) fail("invalid provider closure digest");
   const releaseName = `${descriptor.version}-${descriptor.platform}-${closure.slice(0, 12)}`;
@@ -164,12 +167,29 @@ async function main() {
     await fetchAsset(descriptor.assets.manifest, manifest);
     const runtimeRoot = path.join(staging, "runtime");
     safeExtract(archive, runtimeRoot);
+    const bundledNode = path.join(runtimeRoot, "runtime", "bin", "node");
+    if (!fs.existsSync(bundledNode)) fail("provider has no bundled Node runtime");
+    if (sha256(fs.readFileSync(bundledNode)) !== descriptor.provider.runtimeSha256) {
+      fail("bundled Node runtime digest does not match the signed release descriptor");
+    }
+    fs.chmodSync(bundledNode, 0o755);
+    const keyDir = path.join(root, "keys");
+    const receiptKey = path.join(keyDir, "pilot-receipt-ed25519.pem");
+    fs.mkdirSync(keyDir, { recursive: true, mode: 0o700 });
+    if (!fs.existsSync(receiptKey)) {
+      const { privateKey } = crypto.generateKeyPairSync("ed25519");
+      fs.writeFileSync(receiptKey,
+        privateKey.export({ format: "pem", type: "pkcs8" }),
+        { mode: 0o600, flag: "wx" });
+    }
+    fs.chmodSync(receiptKey, 0o600);
     const installed = {
       format: INSTALL_FORMAT,
       version: descriptor.version,
       platform: descriptor.platform,
       signer: descriptor.signer,
       "runtime-root": path.join(target, "runtime"),
+      "receipt-key": receiptKey,
       provider: {
         archive: path.join(target, descriptor.assets.archive.name),
         manifest: path.join(target, descriptor.assets.manifest.name),
@@ -197,13 +217,26 @@ async function main() {
     const currentTmp = path.join(root, `.current-${process.pid}.json`);
     fs.writeFileSync(currentTmp, current, { mode: 0o644 });
     fs.renameSync(currentTmp, path.join(root, "current.json"));
+    const currentLinkTmp = path.join(root, `.current-${process.pid}`);
+    fs.rmSync(currentLinkTmp, { recursive: true, force: true });
+    fs.symlinkSync(path.join("releases", releaseName), currentLinkTmp, "dir");
+    fs.renameSync(currentLinkTmp, path.join(root, "current"));
     fs.mkdirSync(path.join(root, "bin"), { recursive: true, mode: 0o755 });
+    const launchers = {
+      "kcm-evaluate": launcherSource(root, "kcm-evaluate.cljs",
+                                      ["--provider", path.join(root, "current", "install.json")]),
+      "kcm-verify": launcherSource(root, "kcm-verify.cljs"),
+    };
+    for (const [name, source] of Object.entries(launchers)) {
+      const launcher = path.join(root, "bin", name);
+      const launcherTmp = path.join(root, "bin", `.${name}-${process.pid}`);
+      fs.writeFileSync(launcherTmp, source, { mode: 0o755 });
+      fs.renameSync(launcherTmp, launcher);
+    }
     const launcher = path.join(root, "bin", "kcm-evaluate");
-    const launcherTmp = path.join(root, "bin", `.kcm-evaluate-${process.pid}`);
-    fs.writeFileSync(launcherTmp, launcherSource(root), { mode: 0o755 });
-    fs.renameSync(launcherTmp, launcher);
     console.log(JSON.stringify({ status: "installed", root, release: releaseName,
-                                launcher, signer: descriptor.signer,
+                                launcher, verifier: path.join(root, "bin", "kcm-verify"),
+                                signer: descriptor.signer,
                                 providerClosureSha256: closure }));
   } catch (error) {
     fs.rmSync(staging, { recursive: true, force: true });

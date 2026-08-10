@@ -30,6 +30,12 @@
       signer (identity/resolve-identity (req "--identity"))
       manifest (reader/read-string (fs/readFileSync manifest-path "utf8"))
       _ (provider/verify-manifest! manifest (provider/closure-sha256 manifest))
+      runtime-path (get-in manifest [:entry :runtime-node])
+      runtime-sha256 (some (fn [entry]
+                             (when (= runtime-path (:path entry)) (:sha256 entry)))
+                           (:files manifest))
+      _ (when-not runtime-sha256
+          (throw (ex-info "provider manifest has no bundled runtime digest" {})))
       archive-name (path/basename archive)
       manifest-name (path/basename manifest-path)
       body {"format" "kotoba-kcm-provider-release/v1"
@@ -38,7 +44,7 @@
             "provider" {"compilerCid" (str "git:" (:compiler-revision manifest))
                         "moduleLockCid" (str "sha256:" (:module-lock-sha256 manifest))
                         "providerClosureSha256" (provider/closure-sha256 manifest)
-                        "runtimeSha256" (provider/file-sha256 js/process.execPath)
+                        "runtimeSha256" runtime-sha256
                         "files" (count (:files manifest))
                         "bytes" (reduce + (map :size (:files manifest)))}
             "assets" {"archive" {"name" archive-name

@@ -1,6 +1,7 @@
 (ns fleet.kcm-evaluate
   "Pure and filesystem helpers for the customer-facing KCM evaluator."
-  (:require ["node:fs" :as fs]
+  (:require ["node:child_process" :as cp]
+            ["node:fs" :as fs]
             ["node:path" :as path]
             [clojure.string :as str]
             [fleet.kcm :as kcm]
@@ -10,28 +11,48 @@
 (def report-format :kotoba-kcm-evaluation/v1)
 (def pilot-share-format :kotoba-kcm-pilot-share/v1)
 
-(defn- walk-files [root]
-  (letfn [(walk [dir relative]
-            (mapcat
-             (fn [entry]
-               (let [name (.-name entry)
-                     rel (if (str/blank? relative) name (str relative "/" name))
-                     absolute (path/join dir name)]
-                 (cond
-                   (and (str/blank? relative) (= ".git" name)) []
-                   (.isSymbolicLink entry)
-                   (throw (ex-info (str "source closure contains symlink: " rel)
-                                   {:path rel}))
-                   (.isDirectory entry) (walk absolute rel)
-                   (.isFile entry) [[rel absolute]]
-                   :else (throw (ex-info (str "source closure contains special file: " rel)
-                                         {:path rel})))))
-             (array-seq (fs/readdirSync dir #js {:withFileTypes true}))))]
-    (sort-by first (walk root ""))))
+(defn- sensitive-source-path? [relative]
+  (let [lower (str/lower-case relative)
+        parts (str/split lower #"/")
+        base (last parts)]
+    (or (some #{".ssh" ".aws" ".gnupg"} parts)
+        (boolean (re-matches #"\.env(?:\..+)?" base))
+        (contains? #{"credentials.json" "service-account.json"
+                     "id_rsa" "id_ed25519"} base)
+        (boolean (re-find #"\.(?:pem|key|p12|pfx)$" base)))))
+
+(defn- tracked-files [root]
+  (let [absolute (path/resolve root)
+        raw (try
+              (cp/execFileSync
+               "git" #js ["-c" "core.fsmonitor=false" "-C" absolute
+                           "ls-files" "-z" "--cached"]
+               #js {:encoding "utf8" :maxBuffer 33554432})
+              (catch :default e
+                (throw (ex-info "source repo must be a Git worktree; KCM will not guess an untracked file boundary"
+                                {:root absolute} e))))
+        relatives (->> (str/split raw #"\u0000") (remove str/blank?) sort vec)]
+    (doseq [relative relatives]
+      (when (sensitive-source-path? relative)
+        (throw (ex-info (str "tracked source closure contains a sensitive credential path: " relative)
+                        {:path relative}))))
+    (mapv
+     (fn [relative]
+       (let [p (path/join absolute relative)
+             stat (fs/lstatSync p)]
+         (cond
+           (.isSymbolicLink stat)
+           (throw (ex-info (str "source closure contains symlink: " relative)
+                           {:path relative}))
+           (.isFile stat) [relative p]
+           :else (throw (ex-info (str "tracked source closure contains a non-regular file: " relative)
+                                 {:path relative})))))
+     relatives)))
 
 (defn source-closure
-  "Hash every regular source file except `.git`. Symlinks and special files
-  fail closed so the tar transport cannot resolve to bytes outside the input."
+  "Hash only Git-tracked regular files. Untracked/ignored files never enter the
+  transport; symlinks, special files, and credential-shaped tracked paths fail
+  closed before any source bytes are copied."
   [root]
   (let [absolute (path/resolve root)]
     (when-not (and (fs/existsSync absolute) (.isDirectory (fs/statSync absolute)))
@@ -40,8 +61,10 @@
                         (let [stat (fs/statSync p)]
                           {:path relative :size (.-size stat)
                            :sha256 (provider/file-sha256 p)}))
-                      (walk-files absolute))
-          body {:format :kotoba-source-closure/v1 :files files}]
+                      (tracked-files absolute))
+          body {:format :kotoba-source-closure/v1
+                :selection :git-tracked
+                :files files}]
       (when (empty? files)
         (throw (ex-info "source repo contains no regular files" {})))
       {:root absolute :body body
@@ -65,7 +88,7 @@
 (defn policy-cid [policy] (str "sha256:" (kcm/sha256 policy)))
 
 (defn discover-entrypoints [root]
-  (->> (walk-files (path/resolve root))
+  (->> (tracked-files (path/resolve root))
        (map first)
        (filter #(str/ends-with? % ".kotoba"))
        vec))
