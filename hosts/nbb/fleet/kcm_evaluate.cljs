@@ -200,15 +200,3 @@
    :checks (mapv #(select-keys % [:id :exit :cache :ms])
                  (get-in report [:checks :verified]))
    :builds (mapv #(select-keys % [:id :exit :cache :ms]) (:builds report))})
-
-(defn json-ready
-  "Convert EDN to JSON data without dropping keyword namespaces. `clj->js`
-  alone turns :code/read into \"read\", which would make a shared capability
-  receipt ambiguous."
-  [x]
-  (cond
-    (keyword? x) (subs (str x) 1)
-    (map? x) (into {} (map (fn [[k v]] [(json-ready k) (json-ready v)])) x)
-    (set? x) (mapv json-ready (sort x))
-    (sequential? x) (mapv json-ready x)
-    :else x))
