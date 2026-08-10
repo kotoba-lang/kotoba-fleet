@@ -27,6 +27,13 @@
       (fs/writeFileSync (path/resolve out) s))
     (print s)))
 
+(defn emit-share! [report out]
+  (when out
+    (let [p (path/resolve out)
+          body (-> report evaluate/pilot-share-report evaluate/json-ready)]
+      (fs/mkdirSync (path/dirname p) #js {:recursive true})
+      (fs/writeFileSync p (str (js/JSON.stringify (clj->js body) nil 2) "\n")))))
+
 (defn installed-provider [filename]
   (let [p (path/resolve filename)
         raw (js->clj (js/JSON.parse (fs/readFileSync p "utf8")) :keywordize-keys true)
@@ -57,7 +64,7 @@
 
 (defn main []
   (when (some #{"--help" "-h"} args)
-    (println "usage: kcm-evaluate --repo DIR --policy POLICY.edn (--provider INSTALL.json | --compiler COMPILER_DIR) [--out REPORT.edn] [--cache DIR]")
+    (println "usage: kcm-evaluate --repo DIR (--auto [--entry FILE] | --policy POLICY.edn) (--provider INSTALL.json | --compiler COMPILER_DIR) [--out REPORT.edn] [--share-out SHARE.json] [--cache DIR]")
     (js/process.exit 0))
   (let [repo (path/resolve (required "--repo"))
         compiler-arg (opt "--compiler" nil)
@@ -66,15 +73,22 @@
             (throw (ex-info "choose exactly one of --provider or --compiler" {:usage true})))
         compiler (some-> compiler-arg path/resolve)
         installed (some-> installed-arg installed-provider)
-        policy-path (path/resolve (required "--policy"))
+        auto? (some #{"--auto"} args)
+        policy-arg (opt "--policy" nil)
+        _ (when (= (boolean auto?) (boolean policy-arg))
+            (throw (ex-info "choose exactly one of --auto or --policy" {:usage true})))
         out (opt "--out" nil)
+        share-out (opt "--share-out" nil)
         tmp (fs/mkdtempSync (path/join (os/tmpdir) "kcm-evaluate-"))
         _ (reset! temp-root tmp)
         source-stage (path/join tmp "source")
         tarball (path/join tmp "source.tgz")
         provider-prefix (path/join tmp "provider")
         spec-path (path/join tmp "spec.edn")
-        policy (-> (fs/readFileSync policy-path "utf8") reader/read-string
+        policy (-> (if auto?
+                     (evaluate/auto-policy repo (opt "--entry" nil))
+                     (-> (path/resolve policy-arg) (fs/readFileSync "utf8")
+                         reader/read-string))
                    evaluate/validate-policy!)
         closure (evaluate/source-closure repo)]
     (evaluate/copy-closure! closure source-stage)
@@ -100,15 +114,17 @@
                   {:policy policy :closure closure
                    :provider-build provider-build :result result})]
       (emit! report out)
+      (emit-share! report share-out)
       (when-not (= :accepted (:decision report)) (set! (.-exitCode js/process) 2)))))
 
 (try
   (main)
   (catch :default e
-    (emit! (evaluate/with-report-cid
-            {:format evaluate/report-format :decision :rejected
-             :reason (.-message e) :reasons (some-> (ex-data e) :reasons)})
-           (opt "--out" nil))
+    (let [report (evaluate/with-report-cid
+                  {:format evaluate/report-format :decision :rejected
+                   :reason (.-message e) :reasons (some-> (ex-data e) :reasons)})]
+      (emit! report (opt "--out" nil))
+      (emit-share! report (opt "--share-out" nil)))
     (set! (.-exitCode js/process) (if (:usage (ex-data e)) 64 2)))
   (finally
     (when @temp-root

@@ -185,6 +185,20 @@ curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-pro
   --out ./kcm-evaluation.edn
 ```
 
+For a design-partner pilot with exactly one `.kotoba` entrypoint, no policy
+authoring is needed. `--auto` grants only source read, check, and compile;
+`--share-out` writes a bounded JSON receipt without source paths, compiler
+output tails, or rejection text:
+
+```sh
+~/.local/share/kotoba-kcm/bin/kcm-evaluate \
+  --repo . --auto --out .kcm/evaluation.edn \
+  --share-out .kcm/pilot-share.json
+```
+
+Repositories with multiple `.kotoba` files must add `--entry path/to/main.kotoba`;
+the evaluator refuses to guess which program the evidence should cover.
+
 Release descriptors are signed by the dedicated Kagi identity
 `kcm-provider-release-ed25519-v1`; the installer trusts only
 `did:key:z6MknAaLaoj8doPeDrPgszg199YG8kZreH2D3UrWAmLcwgYM`. A signer, descriptor,

@@ -8,6 +8,7 @@
 
 (def policy-format :kotoba-kcm-policy/v1)
 (def report-format :kotoba-kcm-evaluation/v1)
+(def pilot-share-format :kotoba-kcm-pilot-share/v1)
 
 (defn- walk-files [root]
   (letfn [(walk [dir relative]
@@ -62,6 +63,45 @@
   destination)
 
 (defn policy-cid [policy] (str "sha256:" (kcm/sha256 policy)))
+
+(defn discover-entrypoints [root]
+  (->> (walk-files (path/resolve root))
+       (map first)
+       (filter #(str/ends-with? % ".kotoba"))
+       vec))
+
+(defn auto-policy
+  "Create the deliberately narrow first-pilot policy. A repo with multiple
+  Kotoba entrypoints must select one explicitly; guessing would turn a green
+  result into evidence about an arbitrary file."
+  [root requested-entry]
+  (let [entries (discover-entrypoints root)
+        requested (some-> requested-entry (str/replace #"^\./" ""))
+        entry (cond
+                requested
+                (if (some #{requested} entries)
+                  requested
+                  (throw (ex-info (str "--entry is not a regular .kotoba file in the repo: "
+                                       requested)
+                                  {:entry requested :entrypoints entries})))
+
+                (= 1 (count entries)) (first entries)
+                (empty? entries)
+                (throw (ex-info "auto pilot found no .kotoba entrypoint"
+                                {:entrypoints []}))
+                :else
+                (throw (ex-info
+                        (str "auto pilot found multiple .kotoba entrypoints; choose --entry: "
+                             (str/join ", " entries))
+                        {:entrypoints entries})))]
+    {:format policy-format
+     :target-abi :wasm32-wasi
+     :effects []
+     :capabilities #{:code/read :build/check :build/compile}
+     :checks [{:id :check :args ["check" entry] :pure? true}]
+     :builds [{:id :wasm
+               :args ["compile" entry "--target" "wasm32-wasi"
+                      "--output" "kcm-pilot.wasm"]}]}))
 
 (defn policy-spec [policy]
   {:machine :kotoba-capability-machine
@@ -138,3 +178,37 @@
               :cache {:misses (count (filter #(= :miss (:cache %)) (:first result)))
                       :verified-hits (count (filter #(= :hit (:cache %)) (:second result)))}}]
     (with-report-cid body)))
+
+(defn pilot-share-report
+  "Remove source paths, command output tails, and rejection text. The result is
+  a bounded pilot-coordination receipt linked to the full local evidence by
+  report CID and machine identity."
+  [report]
+  {:format pilot-share-format
+   :decision (:decision report)
+   :report-cid (:report-cid report)
+   :subject (select-keys (:subject report) [:definition-closure-cid :files :bytes])
+   :policy (-> (select-keys (:policy report) [:cid :target-abi :effects])
+               (assoc :capabilities (vec (sort (:capabilities (:policy report))))))
+   :machine (select-keys (:machine report) [:id :contract])
+   :provider (select-keys (:provider report)
+                          [:compiler-cid :module-lock-cid
+                           :provider-closure-sha256 :runtime-sha256])
+   :containment {:backing (get-in report [:containment :backing])
+                 :blocked (vec (sort (get-in report [:containment :blocked])))
+                 :leaked-count (count (get-in report [:containment :leaked]))}
+   :checks (mapv #(select-keys % [:id :exit :cache :ms])
+                 (get-in report [:checks :verified]))
+   :builds (mapv #(select-keys % [:id :exit :cache :ms]) (:builds report))})
+
+(defn json-ready
+  "Convert EDN to JSON data without dropping keyword namespaces. `clj->js`
+  alone turns :code/read into \"read\", which would make a shared capability
+  receipt ambiguous."
+  [x]
+  (cond
+    (keyword? x) (subs (str x) 1)
+    (map? x) (into {} (map (fn [[k v]] [(json-ready k) (json-ready v)])) x)
+    (set? x) (mapv json-ready (sort x))
+    (sequential? x) (mapv json-ready x)
+    :else x))

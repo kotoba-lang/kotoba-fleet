@@ -337,7 +337,22 @@
       (fs/symlinkSync "/etc/passwd" (path/join source "escape"))
       (check "the public evaluator rejects source symlinks"
              (try (kcm-evaluate/source-closure source) false
-                  (catch :default _ true))))
+                  (catch :default _ true)))
+      (fs/unlinkSync (path/join source "escape"))
+      (let [auto (kcm-evaluate/auto-policy source nil)]
+        (check "the design-partner pilot discovers one Kotoba entrypoint"
+               (= ["check" "main.kotoba"] (get-in auto [:checks 0 :args])))
+        (check "the automatic pilot grants only read, check, and compile"
+               (= #{:code/read :build/check :build/compile} (:capabilities auto))))
+      (fs/writeFileSync (path/join source "other.kotoba") "(ns other)\n")
+      (check "the pilot refuses to guess between multiple entrypoints"
+             (try (kcm-evaluate/auto-policy source nil) false
+                  (catch :default _ true)))
+      (check "an explicit entrypoint resolves a multi-program repository"
+             (= ["check" "other.kotoba"]
+                (get-in (kcm-evaluate/auto-policy source "./other.kotoba")
+                        [:checks 0 :args])))
+      (fs/unlinkSync (path/join source "other.kotoba")))
     (let [blocked [:read-home-ssh :read-home :network-curl :network-node
                    :write-home :write-outside]
           report (kcm-evaluate/evaluation-report
@@ -348,7 +363,20 @@
                             :backing {:blocked blocked :leaked []}
                             :first [] :second [] :builds []}})]
       (check "an incomplete evaluator result cannot become accepted evidence"
-             (= :rejected (:decision report)))))
+             (= :rejected (:decision report)))
+      (let [share (kcm-evaluate/pilot-share-report
+                   (assoc report :reason "private compiler failure"
+                          :checks {:verified [{:id :check :exit 1 :cache :miss :ms 4
+                                              :tail "private source text"}]}))]
+        (check "the pilot share report contains no output tails or rejection text"
+               (and (nil? (:reason share))
+                    (nil? (:tail (first (:checks share))))
+                    (= kcm-evaluate/pilot-share-format (:format share))))
+        (let [json (kcm-evaluate/json-ready share)]
+          (check "the shared JSON preserves capability and format namespaces"
+                 (and (= "kotoba-kcm-pilot-share/v1" (get json "format"))
+                      (= ["build/check" "code/read"]
+                         (get-in json ["policy" "capabilities"]))))))))
   (let [manifest {:format kcm-provider/manifest-format
                   :compiler-revision "git:test" :module-lock-sha256 (apply str (repeat 64 "a"))
                   :entry {:nbb-cli "../node_modules/nbb/cli.js"
