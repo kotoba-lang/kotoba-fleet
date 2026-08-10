@@ -1,0 +1,140 @@
+(ns fleet.kcm-evaluate
+  "Pure and filesystem helpers for the customer-facing KCM evaluator."
+  (:require ["node:fs" :as fs]
+            ["node:path" :as path]
+            [clojure.string :as str]
+            [fleet.kcm :as kcm]
+            [fleet.kcm-provider :as provider]))
+
+(def policy-format :kotoba-kcm-policy/v1)
+(def report-format :kotoba-kcm-evaluation/v1)
+
+(defn- walk-files [root]
+  (letfn [(walk [dir relative]
+            (mapcat
+             (fn [entry]
+               (let [name (.-name entry)
+                     rel (if (str/blank? relative) name (str relative "/" name))
+                     absolute (path/join dir name)]
+                 (cond
+                   (and (str/blank? relative) (= ".git" name)) []
+                   (.isSymbolicLink entry)
+                   (throw (ex-info (str "source closure contains symlink: " rel)
+                                   {:path rel}))
+                   (.isDirectory entry) (walk absolute rel)
+                   (.isFile entry) [[rel absolute]]
+                   :else (throw (ex-info (str "source closure contains special file: " rel)
+                                         {:path rel})))))
+             (array-seq (fs/readdirSync dir #js {:withFileTypes true}))))]
+    (sort-by first (walk root ""))))
+
+(defn source-closure
+  "Hash every regular source file except `.git`. Symlinks and special files
+  fail closed so the tar transport cannot resolve to bytes outside the input."
+  [root]
+  (let [absolute (path/resolve root)]
+    (when-not (and (fs/existsSync absolute) (.isDirectory (fs/statSync absolute)))
+      (throw (ex-info (str "source repo is not a directory: " absolute) {})))
+    (let [files (mapv (fn [[relative p]]
+                        (let [stat (fs/statSync p)]
+                          {:path relative :size (.-size stat)
+                           :sha256 (provider/file-sha256 p)}))
+                      (walk-files absolute))
+          body {:format :kotoba-source-closure/v1 :files files}]
+      (when (empty? files)
+        (throw (ex-info "source repo contains no regular files" {})))
+      {:root absolute :body body
+       :cid (str "sha256:" (kcm/sha256 body))
+       :files (count files) :bytes (reduce + (map :size files))})))
+
+(defn copy-closure! [closure destination]
+  (fs/mkdirSync destination #js {:recursive true})
+  (doseq [{:keys [path size sha256]} (get-in closure [:body :files])]
+    (let [from (path/join (:root closure) path)
+          to (path/join destination path)]
+      (fs/mkdirSync (path/dirname to) #js {:recursive true})
+      (fs/copyFileSync from to)
+      (let [stat (fs/statSync to)
+            actual (provider/file-sha256 to)]
+        (when-not (and (= size (.-size stat)) (= sha256 actual))
+          (throw (ex-info (str "source changed while copying closure: " path)
+                          {:path path :expected sha256 :actual actual}))))))
+  destination)
+
+(defn policy-cid [policy] (str "sha256:" (kcm/sha256 policy)))
+
+(defn policy-spec [policy]
+  {:machine :kotoba-capability-machine
+   :kcm/identity {:definition-closure-cid "sha256:pending"
+                  :compiler-cid "pending" :module-lock-cid "pending"
+                  :target-abi (:target-abi policy)
+                  :hostcaps-policy-cid (policy-cid policy)
+                  :provider-closure-sha256 (apply str (repeat 64 "0"))
+                  :runtime-sha256 (apply str (repeat 64 "0"))
+                  :effects (vec (or (:effects policy) []))}
+   :kcm/provider {:archive "pending" :manifest "pending"
+                  :archive-sha256 (apply str (repeat 64 "0"))}
+   :kcm/capabilities (set (:capabilities policy))
+   :kcm/checks (:checks policy)
+   :kcm/builds (vec (or (:builds policy) []))})
+
+(defn validate-policy! [policy]
+  (let [format-reasons (cond-> []
+                         (not (map? policy)) (conj "policy must be an EDN map")
+                         (not= policy-format (:format policy))
+                         (conj (str "policy format must be " policy-format)))
+        reasons (into format-reasons (kcm/validation-reasons (policy-spec policy)))]
+    (when (seq reasons)
+      (throw (ex-info (str "invalid KCM policy: " (str/join "; " reasons))
+                      {:reasons reasons})))
+    policy))
+
+(defn complete-spec [{:keys [policy closure provider-build root tarball cache-root]}]
+  (-> (policy-spec policy)
+      (assoc :work-id "kcm-evaluate" :root root :tarball tarball
+             :exec-backing :sandbox-exec :kcm/cache-root cache-root)
+      (assoc :kcm/provider
+             {:archive (:archive provider-build) :manifest (:manifest provider-build)
+              :archive-sha256 (:archive-sha256 provider-build)})
+      (assoc :kcm/identity
+             {:definition-closure-cid (:cid closure)
+              :compiler-cid (:compiler-cid provider-build)
+              :module-lock-cid (:module-lock-cid provider-build)
+              :target-abi (:target-abi policy)
+              :hostcaps-policy-cid (policy-cid policy)
+              :provider-closure-sha256 (:provider-closure-sha256 provider-build)
+              :runtime-sha256 (:runtime-sha256 provider-build)
+              :effects (vec (or (:effects policy) []))})))
+
+(defn with-report-cid [body]
+  (assoc body :report-cid (str "sha256:" (kcm/sha256 body))))
+
+(defn evaluation-report [{:keys [policy closure provider-build result]}]
+  (let [required-probes #{:read-home-ssh :read-home :network-curl :network-node
+                          :write-home :write-outside}
+        runs (concat (:first result) (:second result) (:builds result))
+        contained? (and (empty? (get-in result [:backing :leaked]))
+                        (= required-probes (set (get-in result [:backing :blocked]))))
+        complete? (and (= (count (:checks policy)) (count (:first result)))
+                       (= (count (:checks policy)) (count (:second result)))
+                       (= (count (or (:builds policy) [])) (count (:builds result)))
+                       (string? (:machine-id result)))
+        accepted? (and contained? complete? (every? #(zero? (:exit %)) runs))
+        body {:format report-format
+              :decision (if accepted? :accepted :rejected)
+              :subject {:definition-closure-cid (:cid closure)
+                        :files (:files closure) :bytes (:bytes closure)}
+              :policy {:cid (policy-cid policy) :target-abi (:target-abi policy)
+                       :capabilities (set (:capabilities policy))
+                       :effects (vec (or (:effects policy) []))}
+              :machine {:id (:machine-id result) :contract kcm/contract-version}
+              :provider (select-keys provider-build
+                                     [:compiler-cid :module-lock-cid
+                                      :provider-closure-sha256 :runtime-sha256
+                                      :archive-sha256 :files :bytes])
+              :containment (:backing result)
+              :checks {:first (:first result) :verified (:second result)}
+              :builds (:builds result)
+              :cache {:misses (count (filter #(= :miss (:cache %)) (:first result)))
+                      :verified-hits (count (filter #(= :hit (:cache %)) (:second result)))}}]
+    (with-report-cid body)))

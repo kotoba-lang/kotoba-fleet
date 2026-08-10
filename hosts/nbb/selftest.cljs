@@ -23,6 +23,7 @@
             [fleet.gate :as gate]
             [fleet.identity :as fid]
             [fleet.kcm :as kcm]
+            [fleet.kcm-evaluate :as kcm-evaluate]
             [fleet.kcm-provider :as kcm-provider]
             [fleet.kotobase-store :as kbs]
             [fleet.eval :as ev]
@@ -298,6 +299,16 @@
          (some #(str/includes? % "beginning with check")
                (kcm/validation-reasons
                 (assoc base :kcm/checks [{:id :test :args ["sh" "-c" "kotoba check"]}]))))
+  (check "an absolute source path is rejected"
+         (some #(str/includes? % "beginning with check")
+               (kcm/validation-reasons
+                (assoc base :kcm/checks [{:id :test :args ["check" "/tmp/main.kotoba"]}]))))
+  (check "parent traversal in a build output is rejected"
+         (some #(str/includes? % "build must have")
+               (kcm/validation-reasons
+                (assoc base :kcm/builds [{:id :wasm
+                                          :args ["compile" "src/main.kotoba"
+                                                 "--output=../main.wasm"]}]))))
   (check "a shell-shaped build is rejected"
          (some #(str/includes? % "build must have")
                (kcm/validation-reasons
@@ -306,6 +317,38 @@
          (some #(str/includes? % "unknown KCM capabilities")
                (kcm/validation-reasons
                 (update base :kcm/capabilities conj :process/spawn))))
+  (let [policy {:format kcm-evaluate/policy-format
+                :target-abi :wasm32-wasi :effects []
+                :capabilities #{:code/read :build/check}
+                :checks [{:id :check :args ["check" "main.kotoba"] :pure? true}]}
+        invalid (update policy :capabilities conj :process/spawn)]
+    (check "the public evaluator accepts a closed typed policy"
+           (= policy (kcm-evaluate/validate-policy! policy)))
+    (check "the public evaluator fails closed on ambient authority"
+           (try (kcm-evaluate/validate-policy! invalid) false
+                (catch :default _ true)))
+    (let [source (path/join tmp "kcm-evaluate-source")
+          _ (fs/mkdirSync source #js {:recursive true})
+          _ (fs/writeFileSync (path/join source "main.kotoba") "(ns example)\n")
+          closure (kcm-evaluate/source-closure source)]
+      (check "the public evaluator content-addresses the complete source closure"
+             (and (= 1 (:files closure))
+                  (str/starts-with? (:cid closure) "sha256:")))
+      (fs/symlinkSync "/etc/passwd" (path/join source "escape"))
+      (check "the public evaluator rejects source symlinks"
+             (try (kcm-evaluate/source-closure source) false
+                  (catch :default _ true))))
+    (let [blocked [:read-home-ssh :read-home :network-curl :network-node
+                   :write-home :write-outside]
+          report (kcm-evaluate/evaluation-report
+                  {:policy policy
+                   :closure {:cid "sha256:source" :files 1 :bytes 1}
+                   :provider-build {}
+                   :result {:machine-id "sha256:machine"
+                            :backing {:blocked blocked :leaked []}
+                            :first [] :second [] :builds []}})]
+      (check "an incomplete evaluator result cannot become accepted evidence"
+             (= :rejected (:decision report)))))
   (let [manifest {:format kcm-provider/manifest-format
                   :compiler-revision "git:test" :module-lock-sha256 (apply str (repeat 64 "a"))
                   :entry {:nbb-cli "../node_modules/nbb/cli.js"
