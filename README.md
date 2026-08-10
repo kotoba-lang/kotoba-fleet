@@ -176,9 +176,9 @@ different platform or Node binary, and installs into an immutable directory
 before atomically updating `current.json`:
 
 ```sh
-curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.1.0-darwin-arm64/install-kcm-provider.mjs \
+curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.2.0-darwin-arm64/install-kcm-provider.mjs \
   | node --input-type=module - --descriptor \
-      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.1.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
+      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.2.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
 
 ~/.local/share/kotoba-kcm/bin/kcm-evaluate \
   --repo ./my-kotoba-project --policy ./kcm-policy.edn \
