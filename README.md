@@ -176,9 +176,9 @@ different platform or Node binary, and installs into an immutable directory
 before atomically updating `current.json`:
 
 ```sh
-curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.2.0-darwin-arm64/install-kcm-provider.mjs \
+curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.3.0-darwin-arm64/install-kcm-provider.mjs \
   | node --input-type=module - --descriptor \
-      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.2.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
+      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.3.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
 
 ~/.local/share/kotoba-kcm/bin/kcm-evaluate \
   --repo ./my-kotoba-project --policy ./kcm-policy.edn \
@@ -187,13 +187,13 @@ curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-pro
 
 For a design-partner pilot with exactly one `.kotoba` entrypoint, no policy
 authoring is needed. `--auto` grants only source read, check, and compile;
-`--share-out` writes a bounded JSON receipt without source paths, compiler
+`--share-out` writes a bounded EDN receipt without source paths, compiler
 output tails, or rejection text:
 
 ```sh
 ~/.local/share/kotoba-kcm/bin/kcm-evaluate \
   --repo . --auto --out .kcm/evaluation.edn \
-  --share-out .kcm/pilot-share.json
+  --share-out .kcm/pilot-share.edn
 ```
 
 Repositories with multiple `.kotoba` files must add `--entry path/to/main.kotoba`;

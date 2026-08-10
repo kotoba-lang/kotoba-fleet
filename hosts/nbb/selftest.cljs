@@ -372,11 +372,12 @@
                (and (nil? (:reason share))
                     (nil? (:tail (first (:checks share))))
                     (= kcm-evaluate/pilot-share-format (:format share))))
-        (let [json (kcm-evaluate/json-ready share)]
-          (check "the shared JSON preserves capability and format namespaces"
-                 (and (= "kotoba-kcm-pilot-share/v1" (get json "format"))
-                      (= ["build/check" "code/read"]
-                         (get-in json ["policy" "capabilities"]))))))))
+        (let [round-trip (reader/read-string (pr-str share))]
+          (check "the shared EDN round-trips namespaced capabilities and format"
+                 (and (= share round-trip)
+                      (= :kotoba-kcm-pilot-share/v1 (:format round-trip))
+                      (= [:build/check :code/read]
+                         (get-in round-trip [:policy :capabilities]))))))))
   (let [manifest {:format kcm-provider/manifest-format
                   :compiler-revision "git:test" :module-lock-sha256 (apply str (repeat 64 "a"))
                   :entry {:nbb-cli "../node_modules/nbb/cli.js"

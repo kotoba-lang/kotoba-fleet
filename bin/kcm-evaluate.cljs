@@ -30,9 +30,9 @@
 (defn emit-share! [report out]
   (when out
     (let [p (path/resolve out)
-          body (-> report evaluate/pilot-share-report evaluate/json-ready)]
+          body (evaluate/pilot-share-report report)]
       (fs/mkdirSync (path/dirname p) #js {:recursive true})
-      (fs/writeFileSync p (str (js/JSON.stringify (clj->js body) nil 2) "\n")))))
+      (fs/writeFileSync p (str (pr-str body) "\n")))))
 
 (defn installed-provider [filename]
   (let [p (path/resolve filename)
@@ -64,7 +64,7 @@
 
 (defn main []
   (when (some #{"--help" "-h"} args)
-    (println "usage: kcm-evaluate --repo DIR (--auto [--entry FILE] | --policy POLICY.edn) (--provider INSTALL.json | --compiler COMPILER_DIR) [--out REPORT.edn] [--share-out SHARE.json] [--cache DIR]")
+    (println "usage: kcm-evaluate --repo DIR (--auto [--entry FILE] | --policy POLICY.edn) (--provider INSTALL.json | --compiler COMPILER_DIR) [--out REPORT.edn] [--share-out SHARE.edn] [--cache DIR]")
     (js/process.exit 0))
   (let [repo (path/resolve (required "--repo"))
         compiler-arg (opt "--compiler" nil)
