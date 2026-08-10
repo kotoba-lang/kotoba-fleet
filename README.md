@@ -166,6 +166,32 @@ capability vocabulary; absolute paths, home paths, parent traversal, shell or
 process capabilities, substituted provider bytes, and a different Node runtime
 fail closed. The evaluator does not call a model or require fleet credentials.
 
+### Install a signed provider release
+
+The release provider includes the compiler closure, NBB runtime files, and the
+KCM evaluator/containment runner. It therefore needs neither a compiler checkout
+nor a globally installed `nbb`. The installer is plain Node.js, pins the release
+signer DID, verifies the descriptor signature and both asset digests, rejects a
+different platform or Node binary, and installs into an immutable directory
+before atomically updating `current.json`:
+
+```sh
+curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.1.0-darwin-arm64/install-kcm-provider.mjs \
+  | node --input-type=module - --descriptor \
+      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.1.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
+
+~/.local/share/kotoba-kcm/bin/kcm-evaluate \
+  --repo ./my-kotoba-project --policy ./kcm-policy.edn \
+  --out ./kcm-evaluation.edn
+```
+
+Release descriptors are signed by the dedicated Kagi identity
+`kcm-provider-release-ed25519-v1`; the installer trusts only
+`did:key:z6MknAaLaoj8doPeDrPgszg199YG8kZreH2D3UrWAmLcwgYM`. A signer, descriptor,
+archive, manifest, runtime, or installed immutable-release substitution fails
+closed. `scripts/sign-kcm-provider-release.cljs` is the release-side producer;
+`scripts/install-kcm-provider.mjs` is the standalone consumer.
+
 Pure checks use a cross-session cache keyed by KCM id plus patch digest. A
 compiler, dependency, ABI, policy, command, or code change therefore misses;
 renames that preserve the admitted definition closure can hit. Effectful KCM
@@ -471,6 +497,7 @@ inspection — nothing is pushed.
 ```bash
 clojure -M:lint          # clj-kondo (errors fail)
 clojure -M:test          # cognitect test-runner — contract tests
+node scripts/kcm-provider-installer-selftest.mjs  # signed descriptor trust boundary
 nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljs   # nbb host invariants
 ```
 

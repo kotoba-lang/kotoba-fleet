@@ -25,6 +25,14 @@
 (def out-prefix (path/resolve (opt "--out" "./build/kotoba-provider")))
 (def staging (fs/mkdtempSync (path/join (os/tmpdir) "kcm-provider-build-")))
 (def gitlibs (or (.-GITLIBS js/process.env) (path/join (os/homedir) ".gitlibs")))
+(def fleet-root (path/resolve "."))
+
+(def runner-files
+  ["bin/kcm-evaluate.cljs"
+   "hosts/nbb/fleet/kcm.cljs"
+   "hosts/nbb/fleet/kcm_evaluate.cljs"
+   "hosts/nbb/fleet/kcm_provider.cljs"
+   "hosts/nbb/fleet/sandbox_agent.cljs"])
 
 (defn sh [cmd argv opts]
   (cp/execFileSync cmd (clj->js (if (= cmd "git")
@@ -70,6 +78,13 @@
                     {:expected (:lock/deps-digest lock) :actual deps-digest})))
   (copy-tree! (path/join compiler "src") (path/join staging "compiler/src"))
   (copy-tree! (path/join compiler "resources") (path/join staging "compiler/resources"))
+  (doseq [relative runner-files]
+    (let [source (path/join fleet-root relative)
+          target (path/join staging "runner" relative)]
+      (when-not (fs/existsSync source)
+        (throw (ex-info (str "missing KCM runner input " relative) {:path source})))
+      (fs/mkdirSync (path/dirname target) #js {:recursive true})
+      (fs/copyFileSync source target)))
   (doseq [package ["nbb" "import-meta-resolve" "@noble/hashes"]]
     (copy-tree! (path/join compiler "node_modules" package)
                 (path/join staging "node_modules" package)))
@@ -100,7 +115,10 @@
                   :module-lock-sha256 (provider/file-sha256 lock-path)
                   :entry {:nbb-cli "node_modules/nbb/cli.js"
                           :classpath (vec classpath)
-                          :main "compiler/src/kotoba/compiler/nbb/cli.cljs"}
+                          :main "compiler/src/kotoba/compiler/nbb/cli.cljs"
+                          :runner-classpath ["runner/hosts/nbb"]
+                          :kcm-evaluate "runner/bin/kcm-evaluate.cljs"
+                          :sandbox-agent "runner/hosts/nbb/fleet/sandbox_agent.cljs"}
                   :files files}
         closure (provider/closure-sha256 manifest)
         archive (str out-prefix ".tar")

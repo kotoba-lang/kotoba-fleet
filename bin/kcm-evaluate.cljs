@@ -27,12 +27,45 @@
       (fs/writeFileSync (path/resolve out) s))
     (print s)))
 
+(defn installed-provider [filename]
+  (let [p (path/resolve filename)
+        raw (js->clj (js/JSON.parse (fs/readFileSync p "utf8")) :keywordize-keys true)
+        provider (:provider raw)
+        runtime-root (:runtime-root raw)]
+    (when-not (and (= "kotoba-kcm-provider-install/v1" (:format raw))
+                   (string? runtime-root)
+                   (every? string? (map provider
+                                        [:archive :manifest :archive-sha256
+                                         :provider-closure-sha256 :compiler-cid
+                                         :module-lock-cid :runtime-sha256])))
+      (throw (ex-info (str "invalid installed KCM provider metadata: " p) {})))
+    {:provider-build provider
+     :runner {:node js/process.execPath
+              :nbb-cli (path/join runtime-root "node_modules/nbb/cli.js")
+              :classpath (path/join runtime-root "runner/hosts/nbb")
+              :sandbox-agent (path/join runtime-root
+                                        "runner/hosts/nbb/fleet/sandbox_agent.cljs")}}))
+
+(defn run-sandbox-agent [runner spec-path]
+  (if runner
+    (run (:node runner)
+         ["--stack-size=4096" (:nbb-cli runner) "--classpath" (:classpath runner)
+          (:sandbox-agent runner) "--spec" spec-path "--kcm-probe"] {})
+    (run "nbb" ["--classpath" "hosts/nbb"
+                "hosts/nbb/fleet/sandbox_agent.cljs"
+                "--spec" spec-path "--kcm-probe"] {})))
+
 (defn main []
   (when (some #{"--help" "-h"} args)
-    (println "usage: nbb --classpath hosts/nbb bin/kcm-evaluate.cljs --repo DIR --policy POLICY.edn --compiler COMPILER_DIR [--out REPORT.edn] [--cache DIR]")
+    (println "usage: kcm-evaluate --repo DIR --policy POLICY.edn (--provider INSTALL.json | --compiler COMPILER_DIR) [--out REPORT.edn] [--cache DIR]")
     (js/process.exit 0))
   (let [repo (path/resolve (required "--repo"))
-        compiler (path/resolve (required "--compiler"))
+        compiler-arg (opt "--compiler" nil)
+        installed-arg (opt "--provider" nil)
+        _ (when (= (boolean compiler-arg) (boolean installed-arg))
+            (throw (ex-info "choose exactly one of --provider or --compiler" {:usage true})))
+        compiler (some-> compiler-arg path/resolve)
+        installed (some-> installed-arg installed-provider)
         policy-path (path/resolve (required "--policy"))
         out (opt "--out" nil)
         tmp (fs/mkdtempSync (path/join (os/tmpdir) "kcm-evaluate-"))
@@ -47,10 +80,11 @@
     (evaluate/copy-closure! closure source-stage)
     (run "tar" ["czf" tarball "-C" tmp "source"] {})
     (let [provider-build
-          (-> (run "nbb" ["--classpath" "hosts/nbb"
-                           "scripts/build-kcm-provider.cljs"
-                           "--compiler" compiler "--out" provider-prefix] {})
-              str/split-lines last reader/read-string)
+          (or (:provider-build installed)
+              (-> (run "nbb" ["--classpath" "hosts/nbb"
+                               "scripts/build-kcm-provider.cljs"
+                               "--compiler" compiler "--out" provider-prefix] {})
+                  str/split-lines last reader/read-string))
           spec (evaluate/complete-spec
                  {:policy policy :closure closure :provider-build provider-build
                  :root (path/join tmp "sandbox") :tarball tarball
@@ -60,9 +94,7 @@
                                                  (path/join (os/homedir) ".cache"))
                                               "kotoba-kcm")))})
           _ (fs/writeFileSync spec-path (pr-str spec))
-          raw (run "nbb" ["--classpath" "hosts/nbb"
-                          "hosts/nbb/fleet/sandbox_agent.cljs"
-                          "--spec" spec-path "--kcm-probe"] {})
+          raw (run-sandbox-agent (:runner installed) spec-path)
           result (reader/read-string (last (str/split-lines raw)))
           report (evaluate/evaluation-report
                   {:policy policy :closure closure
