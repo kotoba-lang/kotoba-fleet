@@ -144,7 +144,7 @@
         (throw (ex-info "bundled KCM Node runtime digest mismatch" {})))
       {:root provider-root
        :manifest manifest-data
-       :argv-prefix (into [js/process.execPath "--stack-size=4096"
+       :argv-prefix (into [(inside runtime-node) "--stack-size=4096"
                            (inside nbb-cli) "--classpath"
                            (str/join (.-delimiter path) (map inside classpath))
                            (inside main)] [])})))

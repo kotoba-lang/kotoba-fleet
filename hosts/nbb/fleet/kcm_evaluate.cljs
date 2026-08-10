@@ -155,7 +155,12 @@
 (defn complete-spec [{:keys [policy closure provider-build root tarball cache-root]}]
   (-> (policy-spec policy)
       (assoc :work-id "kcm-evaluate" :root root :tarball tarball
-             :exec-backing :sandbox-exec :kcm/cache-root cache-root)
+             :exec-backing (case (.-platform js/process)
+                             "darwin" :sandbox-exec
+                             "linux" :bubblewrap
+                             (throw (ex-info "KCM has no verified execution backing for this OS"
+                                             {:platform (.-platform js/process)})))
+             :kcm/cache-root cache-root)
       (assoc :kcm/provider
              {:archive (:archive provider-build) :manifest (:manifest provider-build)
               :archive-sha256 (:archive-sha256 provider-build)})
@@ -173,8 +178,8 @@
   (assoc body :report-cid (str "sha256:" (kcm/sha256 body))))
 
 (defn evaluation-report [{:keys [policy closure provider-build result]}]
-  (let [required-probes #{:read-home-ssh :read-home :network-curl :network-node
-                          :write-home :write-outside}
+  (let [required-probes #{:read-home-ssh :read-home :read-ambient-env
+                          :network-curl :network-node :write-home :write-outside}
         runs (concat (:first result) (:second result) (:builds result))
         contained? (and (empty? (get-in result [:backing :leaked]))
                         (= required-probes (set (get-in result [:backing :blocked]))))
