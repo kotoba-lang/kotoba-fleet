@@ -56,7 +56,9 @@
 (defn verify-manifest! [manifest expected]
   (let [files (:files manifest)
         paths (mapv :path files)
-        {:keys [nbb-cli classpath main]} (:entry manifest)]
+        {:keys [nbb-cli classpath main runner-classpath kcm-evaluate sandbox-agent]}
+        (:entry manifest)
+        runner-paths (remove nil? (concat runner-classpath [kcm-evaluate sandbox-agent]))]
   (when-not (= manifest-format (:format manifest))
     (throw (ex-info "unsupported Kotoba provider manifest" {:actual (:format manifest)})))
   (when-not (= expected (closure-sha256 manifest))
@@ -66,12 +68,17 @@
                  (every? safe-relative? classpath)
                  (safe-relative? nbb-cli) (safe-relative? main))
     (throw (ex-info "invalid Kotoba provider entry" {:entry (:entry manifest)})))
+  (when (seq runner-paths)
+    (when-not (and (vector? runner-classpath) (seq runner-classpath)
+                   (every? safe-relative? runner-paths))
+      (throw (ex-info "invalid KCM runner entry" {:entry (:entry manifest)}))))
   (when-not (and (vector? files) (seq files)
                  (= (count paths) (count (distinct paths)))
                  (every? safe-relative? paths)
                  (every? #(and (nat-int? (:size %)) (kcm/sha256-hex? (:sha256 %))) files)
                  (contains? (set paths) nbb-cli)
-                 (contains? (set paths) main))
+                 (contains? (set paths) main)
+                 (every? #(contains? (set paths) %) (remove nil? [kcm-evaluate sandbox-agent])))
     (throw (ex-info "invalid Kotoba provider file manifest" {})))
   manifest))
 
