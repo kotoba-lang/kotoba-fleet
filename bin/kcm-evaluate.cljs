@@ -8,7 +8,8 @@
             ["node:path" :as path]
             [cljs.reader :as reader]
             [clojure.string :as str]
-            [fleet.kcm-evaluate :as evaluate]))
+            [fleet.kcm-evaluate :as evaluate]
+            [fleet.kcm-receipt :as receipt]))
 
 (def args (vec *command-line-args*))
 (def temp-root (atom nil))
@@ -27,10 +28,10 @@
       (fs/writeFileSync (path/resolve out) s))
     (print s)))
 
-(defn emit-share! [report out]
+(defn emit-share! [report out private-key]
   (when out
     (let [p (path/resolve out)
-          body (evaluate/pilot-share-report report)]
+          body (receipt/sign (evaluate/pilot-share-report report) private-key)]
       (fs/mkdirSync (path/dirname p) #js {:recursive true})
       (fs/writeFileSync p (str (pr-str body) "\n")))))
 
@@ -38,15 +39,18 @@
   (let [p (path/resolve filename)
         raw (js->clj (js/JSON.parse (fs/readFileSync p "utf8")) :keywordize-keys true)
         provider (:provider raw)
-        runtime-root (:runtime-root raw)]
+        runtime-root (:runtime-root raw)
+        receipt-key (:receipt-key raw)]
     (when-not (and (= "kotoba-kcm-provider-install/v1" (:format raw))
                    (string? runtime-root)
+                   (string? receipt-key)
                    (every? string? (map provider
                                         [:archive :manifest :archive-sha256
                                          :provider-closure-sha256 :compiler-cid
                                          :module-lock-cid :runtime-sha256])))
       (throw (ex-info (str "invalid installed KCM provider metadata: " p) {})))
     {:provider-build provider
+     :receipt-key receipt-key
      :runner {:node js/process.execPath
               :nbb-cli (path/join runtime-root "node_modules/nbb/cli.js")
               :classpath (path/join runtime-root "runner/hosts/nbb")
@@ -64,7 +68,7 @@
 
 (defn main []
   (when (some #{"--help" "-h"} args)
-    (println "usage: kcm-evaluate --repo DIR (--auto [--entry FILE] | --policy POLICY.edn) (--provider INSTALL.json | --compiler COMPILER_DIR) [--out REPORT.edn] [--share-out SHARE.edn] [--cache DIR]")
+    (println "usage: kcm-evaluate --repo DIR (--auto [--entry FILE] | --policy POLICY.edn) (--provider INSTALL.json | --compiler COMPILER_DIR) [--receipt-key KEY.pem] [--out REPORT.edn] [--share-out SIGNED.edn] [--cache DIR]")
     (js/process.exit 0))
   (let [repo (path/resolve (required "--repo"))
         compiler-arg (opt "--compiler" nil)
@@ -79,6 +83,9 @@
             (throw (ex-info "choose exactly one of --auto or --policy" {:usage true})))
         out (opt "--out" nil)
         share-out (opt "--share-out" nil)
+        receipt-key (or (:receipt-key installed) (opt "--receipt-key" nil))
+        _ (when (and share-out (not receipt-key))
+            (throw (ex-info "--share-out requires the installed provider receipt key or --receipt-key" {:usage true})))
         tmp (fs/mkdtempSync (path/join (os/tmpdir) "kcm-evaluate-"))
         _ (reset! temp-root tmp)
         source-stage (path/join tmp "source")
@@ -114,7 +121,7 @@
                   {:policy policy :closure closure
                    :provider-build provider-build :result result})]
       (emit! report out)
-      (emit-share! report share-out)
+      (emit-share! report share-out receipt-key)
       (when-not (= :accepted (:decision report)) (set! (.-exitCode js/process) 2)))))
 
 (try
@@ -123,8 +130,9 @@
     (let [report (evaluate/with-report-cid
                   {:format evaluate/report-format :decision :rejected
                    :reason (.-message e) :reasons (some-> (ex-data e) :reasons)})]
-      (emit! report (opt "--out" nil))
-      (emit-share! report (opt "--share-out" nil)))
+      (emit! report (opt "--out" nil)))
+    ;; A rejected startup must not overwrite a prior signed pilot receipt with
+    ;; an unsigned or partially bound artifact.
     (set! (.-exitCode js/process) (if (:usage (ex-data e)) 64 2)))
   (finally
     (when @temp-root

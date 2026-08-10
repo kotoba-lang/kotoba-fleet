@@ -5,8 +5,8 @@
   path inside it is trusted. The stable manifest closure is part of the KCM
   identity; the archive digest separately protects transport bytes. After
   extraction every regular file is matched against the closure manifest and
-  symlinks are rejected. The only host executable is the current Node binary,
-  whose bytes are also part of the KCM identity."
+  symlinks are rejected. The provider carries the exact Node executable whose
+  bytes are part of the KCM identity; the installed launcher enters through it."
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             ["node:path" :as path]
@@ -56,9 +56,11 @@
 (defn verify-manifest! [manifest expected]
   (let [files (:files manifest)
         paths (mapv :path files)
-        {:keys [nbb-cli classpath main runner-classpath kcm-evaluate sandbox-agent]}
+        {:keys [nbb-cli classpath main runner-classpath kcm-evaluate kcm-verify
+                runtime-node sandbox-agent]}
         (:entry manifest)
-        runner-paths (remove nil? (concat runner-classpath [kcm-evaluate sandbox-agent]))]
+        runner-paths (remove nil? (concat runner-classpath
+                                          [kcm-evaluate kcm-verify runtime-node sandbox-agent]))]
   (when-not (= manifest-format (:format manifest))
     (throw (ex-info "unsupported Kotoba provider manifest" {:actual (:format manifest)})))
   (when-not (= expected (closure-sha256 manifest))
@@ -78,7 +80,8 @@
                  (every? #(and (nat-int? (:size %)) (kcm/sha256-hex? (:sha256 %))) files)
                  (contains? (set paths) nbb-cli)
                  (contains? (set paths) main)
-                 (every? #(contains? (set paths) %) (remove nil? [kcm-evaluate sandbox-agent])))
+                 (every? #(contains? (set paths) %)
+                         (remove nil? [kcm-evaluate kcm-verify runtime-node sandbox-agent])))
     (throw (ex-info "invalid Kotoba provider file manifest" {})))
   manifest))
 
@@ -134,8 +137,11 @@
     (fs/mkdirSync provider-root #js {:recursive true})
     (cp/execFileSync "tar" #js ["xf" archive "-C" provider-root])
     (verify-tree! provider-root manifest-data)
-    (let [{:keys [nbb-cli classpath main]} (:entry manifest-data)
+    (let [{:keys [nbb-cli classpath main runtime-node]} (:entry manifest-data)
           inside #(path/join provider-root %)]
+      (when (and runtime-node
+                 (not= expected-runtime (file-sha256 (inside runtime-node))))
+        (throw (ex-info "bundled KCM Node runtime digest mismatch" {})))
       {:root provider-root
        :manifest manifest-data
        :argv-prefix (into [js/process.execPath "--stack-size=4096"

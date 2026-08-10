@@ -25,6 +25,7 @@
             [fleet.kcm :as kcm]
             [fleet.kcm-evaluate :as kcm-evaluate]
             [fleet.kcm-provider :as kcm-provider]
+            [fleet.kcm-receipt :as kcm-receipt]
             [fleet.kotobase-store :as kbs]
             [fleet.eval :as ev]
             [fleet.node :as fnode]
@@ -330,14 +331,32 @@
     (let [source (path/join tmp "kcm-evaluate-source")
           _ (fs/mkdirSync source #js {:recursive true})
           _ (fs/writeFileSync (path/join source "main.kotoba") "(ns example)\n")
+          _ (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                          "init" "-q"])
+          _ (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                          "add" "main.kotoba"])
+          _ (fs/writeFileSync (path/join source "untracked.txt") "must stay outside KCM\n")
           closure (kcm-evaluate/source-closure source)]
-      (check "the public evaluator content-addresses the complete source closure"
+      (check "the public evaluator content-addresses only the Git-tracked source closure"
              (and (= 1 (:files closure))
                   (str/starts-with? (:cid closure) "sha256:")))
+      (fs/writeFileSync (path/join source ".env") "TOKEN=must-not-enter\n")
+      (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                    "add" "-f" ".env"])
+      (check "the public evaluator rejects tracked credential-shaped paths"
+             (try (kcm-evaluate/source-closure source) false
+                  (catch :default _ true)))
+      (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                    "rm" "--cached" "-q" ".env"])
+      (fs/unlinkSync (path/join source ".env"))
       (fs/symlinkSync "/etc/passwd" (path/join source "escape"))
+      (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                    "add" "escape"])
       (check "the public evaluator rejects source symlinks"
              (try (kcm-evaluate/source-closure source) false
                   (catch :default _ true)))
+      (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                    "rm" "--cached" "-q" "escape"])
       (fs/unlinkSync (path/join source "escape"))
       (let [auto (kcm-evaluate/auto-policy source nil)]
         (check "the design-partner pilot discovers one Kotoba entrypoint"
@@ -345,6 +364,8 @@
         (check "the automatic pilot grants only read, check, and compile"
                (= #{:code/read :build/check :build/compile} (:capabilities auto))))
       (fs/writeFileSync (path/join source "other.kotoba") "(ns other)\n")
+      (cp/execFileSync "git" #js ["-c" "core.fsmonitor=false" "-C" source
+                                    "add" "other.kotoba"])
       (check "the pilot refuses to guess between multiple entrypoints"
              (try (kcm-evaluate/auto-policy source nil) false
                   (catch :default _ true)))
@@ -377,7 +398,23 @@
                  (and (= share round-trip)
                       (= :kotoba-kcm-pilot-share/v1 (:format round-trip))
                       (= [:build/check :code/read]
-                         (get-in round-trip [:policy :capabilities]))))))))
+                         (get-in round-trip [:policy :capabilities])))))
+        (let [key-path (path/join tmp "pilot-receipt-key.pem")
+              pair (crypto/generateKeyPairSync "ed25519")
+              _ (fs/writeFileSync key-path
+                                  (.export (.-privateKey pair)
+                                           #js {:format "pem" :type "pkcs8"}))
+              signed (kcm-receipt/sign share key-path)]
+          (check "a signed KCM pilot EDN receipt verifies offline"
+                 (= signed (kcm-receipt/verify! signed)))
+          (check "receipt body tampering is rejected"
+                 (try (kcm-receipt/verify!
+                       (assoc-in signed [:receipt :decision] :accepted))
+                      false (catch :default _ true)))
+          (check "receipt signature tampering is rejected"
+                 (try (kcm-receipt/verify!
+                       (assoc-in signed [:signature :value] (apply str (repeat 128 "0"))))
+                      false (catch :default _ true)))))))
   (let [manifest {:format kcm-provider/manifest-format
                   :compiler-revision "git:test" :module-lock-sha256 (apply str (repeat 64 "a"))
                   :entry {:nbb-cli "../node_modules/nbb/cli.js"

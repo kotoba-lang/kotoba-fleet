@@ -23,15 +23,21 @@
   (or (second (drop-while #(not= flag %) args)) default))
 (def compiler (path/resolve (opt "--compiler" "../compiler")))
 (def out-prefix (path/resolve (opt "--out" "./build/kotoba-provider")))
+(def runtime-node (path/resolve (opt "--runtime-node" js/process.execPath)))
+(def runtime-license
+  (path/resolve (opt "--runtime-license"
+                     (path/join (path/dirname runtime-node) "../LICENSE"))))
 (def staging (fs/mkdtempSync (path/join (os/tmpdir) "kcm-provider-build-")))
 (def gitlibs (or (.-GITLIBS js/process.env) (path/join (os/homedir) ".gitlibs")))
 (def fleet-root (path/resolve "."))
 
 (def runner-files
   ["bin/kcm-evaluate.cljs"
+   "bin/kcm-verify.cljs"
    "hosts/nbb/fleet/kcm.cljs"
    "hosts/nbb/fleet/kcm_evaluate.cljs"
    "hosts/nbb/fleet/kcm_provider.cljs"
+   "hosts/nbb/fleet/kcm_receipt.cljs"
    "hosts/nbb/fleet/sandbox_agent.cljs"])
 
 (defn sh [cmd argv opts]
@@ -78,6 +84,16 @@
                     {:expected (:lock/deps-digest lock) :actual deps-digest})))
   (copy-tree! (path/join compiler "src") (path/join staging "compiler/src"))
   (copy-tree! (path/join compiler "resources") (path/join staging "compiler/resources"))
+  ;; Provider execution is bound to these exact Node bytes. The installer may
+  ;; be bootstrapped by any supported system Node, but KCM launchers never use it.
+  (let [bundled-node (path/join staging "runtime/bin/node")]
+    (when-not (fs/existsSync runtime-license)
+      (throw (ex-info "Node runtime license is required for redistribution"
+                      {:path runtime-license})))
+    (fs/mkdirSync (path/dirname bundled-node) #js {:recursive true})
+    (fs/copyFileSync runtime-node bundled-node)
+    (fs/copyFileSync runtime-license (path/join staging "runtime/LICENSE"))
+    (fs/chmodSync bundled-node 493))
   (doseq [relative runner-files]
     (let [source (path/join fleet-root relative)
           target (path/join staging "runner" relative)]
@@ -118,6 +134,8 @@
                           :main "compiler/src/kotoba/compiler/nbb/cli.cljs"
                           :runner-classpath ["runner/hosts/nbb"]
                           :kcm-evaluate "runner/bin/kcm-evaluate.cljs"
+                          :kcm-verify "runner/bin/kcm-verify.cljs"
+                          :runtime-node "runtime/bin/node"
                           :sandbox-agent "runner/hosts/nbb/fleet/sandbox_agent.cljs"}
                   :files files}
         closure (provider/closure-sha256 manifest)
@@ -133,7 +151,8 @@
                   :provider-closure-sha256 closure
                   :compiler-cid (str "git:" revision)
                   :module-lock-cid (str "sha256:" (:module-lock-sha256 manifest))
-                  :runtime-sha256 (provider/file-sha256 js/process.execPath)
+                  :runtime-sha256 (provider/file-sha256
+                                   (path/join staging "runtime/bin/node"))
                   :files (count files)
                   :bytes (reduce + (map :size files))}]
       (println (pr-str result)))))

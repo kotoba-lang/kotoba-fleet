@@ -103,8 +103,9 @@ The model receives only typed code operations and `kotoba_check <id>`. It does
 not receive a shell, process-spawn tool, executable name, or argv. The host
 looks up the check id in the KCM contract and appends its fixed arguments to a
 verified provider entrypoint, without a shell. The provider bundle includes the
-compiler sources, the exact git-locked dependency closure, NBB, and its npm
-dependencies. A sorted manifest hashes every regular file; symlinks, extra
+compiler sources, the exact git-locked dependency closure, NBB, its npm
+dependencies, and the exact Node runtime. A sorted manifest hashes every
+regular file; symlinks, extra
 files, missing files, a changed archive, or different Node runtime bytes fail
 closed before execution (including on a cache hit). PATH is never consulted,
 so another executable named `kotoba` cannot become the compiler. The governor
@@ -141,13 +142,16 @@ Build and verify the provider without installing a system-wide CLI:
 ```sh
 npm ci --ignore-scripts --omit=optional --prefix ../compiler
 nbb --classpath hosts/nbb scripts/build-kcm-provider.cljs \
-  --compiler ../compiler --out /tmp/kotoba-provider
+  --compiler ../compiler --out /tmp/kotoba-provider \
+  --runtime-node /path/to/official-node/bin/node \
+  --runtime-license /path/to/official-node/LICENSE
 nbb scripts/kcm-coldstart-probe.cljs
 nbb scripts/kcm-node-probe.cljs --node naphtali
 ```
 
 For a first customer evaluation, the repository, compiler checkout, and an
-explicit policy are enough. The evaluator hashes the complete source closure,
+explicit policy are enough. The evaluator hashes only the Git-tracked source
+closure,
 builds and verifies the pinned compiler provider, proves host containment,
 runs every declared check twice (cold miss or prior hit, then a verified hit),
 runs declared builds, and emits one content-addressed EDN report:
@@ -161,24 +165,28 @@ nbb --classpath hosts/nbb bin/kcm-evaluate.cljs \
 ```
 
 The report is `:accepted` only when all checks and builds exit zero and all six
-containment probes are blocked. Policies can select only the closed KCM
+containment probes are blocked. Untracked and ignored files never enter the
+transport. A tracked credential-shaped path (`.env`, private-key extensions,
+or standard credential directories) fails closed. Policies can select only the
+closed KCM
 capability vocabulary; absolute paths, home paths, parent traversal, shell or
 process capabilities, substituted provider bytes, and a different Node runtime
 fail closed. The evaluator does not call a model or require fleet credentials.
 
 ### Install a signed provider release
 
-The release provider includes the compiler closure, NBB runtime files, and the
-KCM evaluator/containment runner. It therefore needs neither a compiler checkout
-nor a globally installed `nbb`. The installer is plain Node.js, pins the release
+The release provider includes the compiler closure, NBB runtime files, the exact
+Node executable, and the KCM evaluator/containment runner. It therefore needs
+neither a compiler checkout nor a globally installed `nbb` or matching Node.
+The installer is plain Node.js used only as a bootstrap, pins the release
 signer DID, verifies the descriptor signature and both asset digests, rejects a
-different platform or Node binary, and installs into an immutable directory
-before atomically updating `current.json`:
+different platform or bundled Node binary, and installs into an immutable
+directory before atomically updating `current`:
 
 ```sh
-curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.3.0-darwin-arm64/install-kcm-provider.mjs \
+curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.4.0-darwin-arm64/install-kcm-provider.mjs \
   | node --input-type=module - --descriptor \
-      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.3.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
+      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.4.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
 
 ~/.local/share/kotoba-kcm/bin/kcm-evaluate \
   --repo ./my-kotoba-project --policy ./kcm-policy.edn \
@@ -187,13 +195,17 @@ curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-pro
 
 For a design-partner pilot with exactly one `.kotoba` entrypoint, no policy
 authoring is needed. `--auto` grants only source read, check, and compile;
-`--share-out` writes a bounded EDN receipt without source paths, compiler
-output tails, or rejection text:
+`--share-out` writes a bounded, device-signed EDN receipt without source paths,
+compiler output tails, or rejection text. The install creates one local Ed25519
+receipt key with mode `0600`; the public key and its SHA-256 identity are embedded
+for offline verification:
 
 ```sh
 ~/.local/share/kotoba-kcm/bin/kcm-evaluate \
   --repo . --auto --out .kcm/evaluation.edn \
   --share-out .kcm/pilot-share.edn
+
+~/.local/share/kotoba-kcm/bin/kcm-verify .kcm/pilot-share.edn
 ```
 
 Repositories with multiple `.kotoba` files must add `--entry path/to/main.kotoba`;
