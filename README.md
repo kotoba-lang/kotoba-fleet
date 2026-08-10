@@ -164,7 +164,7 @@ nbb --classpath hosts/nbb bin/kcm-evaluate.cljs \
   --out build/kcm-evaluation.edn
 ```
 
-The report is `:accepted` only when all checks and builds exit zero and all six
+The report is `:accepted` only when all checks and builds exit zero and all seven
 containment probes are blocked. Untracked and ignored files never enter the
 transport. A tracked credential-shaped path (`.env`, private-key extensions,
 or standard credential directories) fails closed. Policies can select only the
@@ -184,14 +184,22 @@ different platform or bundled Node binary, and installs into an immutable
 directory before atomically updating `current`:
 
 ```sh
-curl -fsSL https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.4.0-darwin-arm64/install-kcm-provider.mjs \
+PLATFORM="$(node -p "process.platform + '-' + process.arch")"
+TAG="kcm-provider-v0.5.0-${PLATFORM}"
+curl -fsSL "https://github.com/kotoba-lang/kotoba-fleet/releases/download/${TAG}/install-kcm-provider.mjs" \
   | node --input-type=module - --descriptor \
-      https://github.com/kotoba-lang/kotoba-fleet/releases/download/kcm-provider-v0.4.0-darwin-arm64/kotoba-kcm-provider-darwin-arm64.json
+      "https://github.com/kotoba-lang/kotoba-fleet/releases/download/${TAG}/kotoba-kcm-provider-${PLATFORM}.json"
 
 ~/.local/share/kotoba-kcm/bin/kcm-evaluate \
   --repo ./my-kotoba-project --policy ./kcm-policy.edn \
   --out ./kcm-evaluation.edn
 ```
+
+Signed providers are published for `darwin-arm64`, `linux-arm64`, and
+`linux-x64`. Linux requires a working `bubblewrap` (`bwrap`) installation; KCM
+refuses to evaluate if its mount, network, home, or ambient-environment probes
+do not hold. macOS uses Seatbelt and fails closed on unsupported operating
+systems.
 
 For a design-partner pilot with exactly one `.kotoba` entrypoint, no policy
 authoring is needed. `--auto` grants only source read, check, and compile;
@@ -218,6 +226,15 @@ archive, manifest, runtime, or installed immutable-release substitution fails
 closed. `scripts/sign-kcm-provider-release.cljs` is the release-side producer;
 `scripts/install-kcm-provider.mjs` is the standalone consumer.
 
+Release maintainers build the platform matrix from SHA-256-verified official
+Node archives rather than from the machine's ambient runtime:
+
+```sh
+nbb scripts/build-kcm-release-matrix.cljs \
+  --compiler ../compiler --out build/kcm-release \
+  --platforms darwin-arm64,linux-arm64,linux-x64
+```
+
 Pure checks use a cross-session cache keyed by KCM id plus patch digest. A
 compiler, dependency, ABI, policy, command, or code change therefore misses;
 renames that preserve the admitted definition closure can hit. Effectful KCM
@@ -228,10 +245,11 @@ Declared compiles are exposed separately as `kotoba_build <id>`. They always
 execute because a result-only cache hit would not restore the produced artifact;
 the final authoritative checks still run independently before admission.
 
-Seatbelt remains an outer host containment layer, not the language security
-model. A container or microVM may replace that backing for high-risk tenants
-without changing the KCM contract or guest tool surface. Legacy sandbox specs
-remain accepted for migration, but they are reported as `:legacy-sandbox`.
+Seatbelt on macOS and bubblewrap on Linux remain outer host containment layers,
+not the language security model. A container or microVM may replace that
+backing for high-risk tenants without changing the KCM contract or guest tool
+surface. Legacy sandbox specs remain accepted for migration, but they are
+reported as `:legacy-sandbox`.
 
 | piece | file | role |
 |---|---|---|
@@ -496,9 +514,11 @@ nbb hosts/nbb/fleet/sandbox_agent.cljs --exec-probe                  # what does
 nbb hosts/nbb/fleet/sandbox_agent.cljs --exec-probe --backing none   # negative control
 ```
 
-Measured on fleet node `naphtali` (macOS 26.2): with the backing, all six
-escapes — `~/.ssh` read, home listing, curl egress, node egress, write to home,
-write outside the sandbox — are blocked; with `--backing none`, all six succeed.
+Measured on fleet node `naphtali` (macOS 26.2): with the backing, all seven
+escapes — `~/.ssh` read, a host-home marker read, ambient-environment read, curl
+egress, node egress, write to home, or write outside the sandbox — are blocked;
+with `--backing none`, all seven succeed. Linux arm64 and x64 independently
+pass the same 7/7 probe under bubblewrap before check or build execution.
 A containment probe that cannot fail proves nothing, so the negative control is
 runnable on the same host.
 

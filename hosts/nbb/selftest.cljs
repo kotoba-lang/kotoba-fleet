@@ -374,7 +374,8 @@
                 (get-in (kcm-evaluate/auto-policy source "./other.kotoba")
                         [:checks 0 :args])))
       (fs/unlinkSync (path/join source "other.kotoba")))
-    (let [blocked [:read-home-ssh :read-home :network-curl :network-node
+    (let [blocked [:read-home-ssh :read-home :read-ambient-env
+                   :network-curl :network-node
                    :write-home :write-outside]
           report (kcm-evaluate/evaluation-report
                   {:policy policy

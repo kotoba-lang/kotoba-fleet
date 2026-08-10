@@ -28,6 +28,7 @@
   (path/resolve (opt "--runtime-license"
                      (path/join (path/dirname runtime-node) "../LICENSE"))))
 (def staging (fs/mkdtempSync (path/join (os/tmpdir) "kcm-provider-build-")))
+(fs/chmodSync staging 493) ; 0755; ClojureScript has no octal literal syntax
 (def gitlibs (or (.-GITLIBS js/process.env) (path/join (os/homedir) ".gitlibs")))
 (def fleet-root (path/resolve "."))
 
@@ -143,7 +144,13 @@
         manifest-path (str out-prefix ".manifest.edn")]
     (fs/mkdirSync (path/dirname out-prefix) #js {:recursive true})
     (fs/writeFileSync manifest-path (str (pr-str manifest) "\n"))
-    (sh "tar" ["cf" archive "-C" staging "."] {})
+    ;; macOS copyfile metadata otherwise becomes `._*` AppleDouble entries when
+    ;; GNU tar extracts the provider on Linux, correctly tripping file-set
+    ;; verification even though the logical inputs match the manifest.
+    (sh "tar" ["--no-xattrs" "--no-mac-metadata"
+               "-cf" archive "-C" staging "."]
+        {:env (js/Object.assign #js {} js/process.env
+                                #js {"COPYFILE_DISABLE" "1"})})
     (let [result {:format :kotoba-provider-build/v1
                   :archive archive
                   :archive-sha256 (provider/file-sha256 archive)

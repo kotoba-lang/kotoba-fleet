@@ -16,7 +16,7 @@
   3. The only command the agent can run is the spec's `:test-cmd` — but the
      agent can WRITE the code that command executes, so confining the file API
      is not enough on its own. `:test-cmd` therefore runs under an OS-level
-     exec backing (macOS Seatbelt via `sandbox-exec`) that denies all network
+     exec backing (macOS Seatbelt or Linux bubblewrap) that denies all network
      access, denies reads of the node's real home (ssh keys, tokens, tailnet
      state), and permits writes only inside the ephemeral sandbox. The backing
      is PROVED at startup by trying those escapes and refusing to run the
@@ -102,15 +102,17 @@
 ;; unrestricted egress). Everything the agent can cause to execute goes through
 ;; `exec!`.
 ;;
-;; macOS Seatbelt is what every fleet node actually has today (all nodes are
-;; macOS 26; none has docker/podman/colima — only lima, with no instance). The
-;; backing is a value, not a hardcoded mechanism, so a Linux container backing
-;; can be added without touching the loop or the tools.
+;; macOS fleet nodes use Seatbelt. Linux installations use bubblewrap with a
+;; read-only root, an empty mount over the real home, a private network
+;; namespace, and writable binds only for the ephemeral KCM workspace.
 
 (def real-home (or (.-HOME js/process.env) "/Users/nobody"))
 (def sandbox-home (path/join root "home"))
 (def sandbox-tmp (path/join root "tmp"))
 (def profile-path (path/join root "sandbox.sb"))
+(def ambient-probe-name "KCM_SANDBOX_AMBIENT_PROBE")
+(aset js/process.env ambient-probe-name "must-not-enter-the-sandbox")
+(def probe-node (atom nil))
 (def exec-backing
   ;; --backing exists so the probe can be run against a DISABLED backing: a
   ;; containment probe that cannot fail proves nothing, so the negative control
@@ -145,14 +147,42 @@
     (throw (ex-info (str "sandbox root must live outside the node's home: " root) {})))
   (fs/mkdirSync sandbox-home #js {:recursive true})
   (fs/mkdirSync sandbox-tmp #js {:recursive true})
-  (fs/writeFileSync profile-path profile-src))
+  (case exec-backing
+    :sandbox-exec (fs/writeFileSync profile-path profile-src)
+    :bubblewrap
+    (let [probe (cp/spawnSync "bwrap" #js ["--version"] #js {:encoding "utf8"})]
+      (when-not (zero? (or (.-status probe) 1))
+        (throw (ex-info "Linux KCM requires a working bubblewrap executable" {}))))
+    :none nil
+    (throw (ex-info (str "unknown :exec-backing " exec-backing) {}))))
+
+(defn- clean-env []
+  #js {"HOME" sandbox-home
+       "TMPDIR" sandbox-tmp
+       "PATH" (or (.-PATH js/process.env) "/usr/local/bin:/usr/bin:/bin")
+       "LANG" (or (.-LANG js/process.env) "C.UTF-8")
+       "LC_ALL" (or (.-LC_ALL js/process.env) "C.UTF-8")})
+
+(defn- bubblewrap-argv [cmd cmd-args]
+  (concat ["--die-with-parent" "--new-session" "--unshare-all"
+           "--ro-bind" "/" "/"
+           "--dev-bind" "/dev" "/dev"
+           "--proc" "/proc"
+           "--tmpfs" (backing-path real-home)
+           "--bind" (backing-path work-dir) (backing-path work-dir)
+           "--bind" (backing-path sandbox-home) (backing-path sandbox-home)
+           "--bind" (backing-path sandbox-tmp) (backing-path sandbox-tmp)
+           "--chdir" (backing-path work-dir)
+           "--setenv" "HOME" (backing-path sandbox-home)
+           "--setenv" "TMPDIR" (backing-path sandbox-tmp)
+           "--"]
+          [cmd] cmd-args))
 
 (defn exec!
   "Run `cmd` (a shell string) under the exec backing. Returns {:exit :out}.
   This is the ONLY path by which agent-authored code runs."
   [cmd {:keys [timeout-ms]}]
-  (let [env (js/Object.assign #js {} js/process.env
-                              #js {"HOME" sandbox-home "TMPDIR" sandbox-tmp})
+  (let [env (clean-env)
         [prog args] (case exec-backing
                       :sandbox-exec
                       ["sandbox-exec" ["-f" profile-path
@@ -161,6 +191,8 @@
                                        "-D" (str "SBHOME=" (backing-path sandbox-home))
                                        "-D" (str "SBTMP=" (backing-path sandbox-tmp))
                                        "sh" "-c" cmd]]
+                      :bubblewrap
+                      ["bwrap" (bubblewrap-argv "sh" ["-c" cmd])]
                       ;; explicit, recorded in the payload, and rejected by the
                       ;; dispatcher's gate unless the work-unit opts in
                       :none ["sh" ["-c" cmd]]
@@ -177,8 +209,7 @@
   providers use this path exclusively: the executable and every argument were
   committed into the machine identity before the model ran."
   [argv {:keys [timeout-ms]}]
-  (let [env (js/Object.assign #js {} js/process.env
-                              #js {"HOME" sandbox-home "TMPDIR" sandbox-tmp})
+  (let [env (clean-env)
         [cmd & cmd-args] argv
         [prog args] (case exec-backing
                       :sandbox-exec
@@ -187,8 +218,10 @@
                                                 "-D" (str "WORK=" (backing-path work-dir))
                                                 "-D" (str "SBHOME=" (backing-path sandbox-home))
                                                 "-D" (str "SBTMP=" (backing-path sandbox-tmp))
-                                                cmd]
+                                               cmd]
                                                cmd-args)]
+                      :bubblewrap
+                      ["bwrap" (bubblewrap-argv cmd cmd-args)]
                       :none [cmd cmd-args]
                       (throw (ex-info (str "unknown :exec-backing " exec-backing) {})))]
     (try {:exit 0 :out (sh prog args {:cwd work-dir :env env
@@ -198,38 +231,63 @@
            {:exit (or (.-status e) 1)
             :out (str (some-> (.-stdout e) str) "\n" (some-> (.-stderr e) str))}))))
 
-(def ^:private probe-marks
+(def ^:private probe-paths
   ;; Probing a write escape must not litter the node when the backing is
   ;; deliberately :none (the escapes then really do succeed), so the targets are
   ;; run-specific and removed afterwards.
-  [(str real-home "/.fleet-sandbox-probe-" (.-pid js/process))
-   (str "/private/tmp/.fleet-sandbox-probe-" (.-pid js/process))])
+  {:home-read (str real-home "/.fleet-sandbox-read-probe-" (.-pid js/process))
+   :home-write (str real-home "/.fleet-sandbox-write-probe-" (.-pid js/process))
+   :outside-write
+   (str (if (= "darwin" (.-platform js/process)) "/private/tmp" "/tmp")
+        "/.fleet-sandbox-write-probe-" (.-pid js/process))})
 
-(def escape-probes
-  "What the backing must make impossible. Each entry must EXIT NON-ZERO."
+(defn escape-probes
+  "What the backing must make impossible. Write probes are judged by whether
+  the host-side marker changed, not by the inner command's exit: a private
+  mount may accept a write without letting it escape into the host namespace."
+  []
   [{:id :read-home-ssh :cmd (str "ls " real-home "/.ssh")}
-   {:id :read-home     :cmd (str "ls " real-home)}
+   {:id :read-home     :cmd (str "test -r " (:home-read probe-paths))}
+   {:id :read-ambient-env :cmd (str "test -n \"$" ambient-probe-name "\"")}
    {:id :network-curl  :cmd "curl -sS --max-time 8 https://example.com -o /dev/null"}
-   {:id :network-node  :cmd "node -e \"require('node:https').get('https://example.com',r=>process.exit(0)).on('error',()=>process.exit(9))\""}
-   {:id :write-home    :cmd (str "echo pwn > " (first probe-marks))}
-   {:id :write-outside :cmd (str "echo pwn > " (second probe-marks))}])
+   {:id :network-node
+    :cmd (str "\"" (or @probe-node js/process.execPath)
+              "\" -e \"require('node:https').get('https://example.com',r=>process.exit(0)).on('error',()=>process.exit(9))\"")}
+   {:id :write-home
+    :cmd (str "echo pwn > " (:home-write probe-paths))
+    :host-mark (:home-write probe-paths)}
+   {:id :write-outside
+    :cmd (str "echo pwn > " (:outside-write probe-paths))
+    :host-mark (:outside-write probe-paths)}])
 
 (defn probe-backing
   "Try every escape. Returns {:backing … :blocked [ids] :leaked [ids]}."
   []
-  (let [results (doall
-                 (for [{:keys [id cmd]} escape-probes]
-                   [id (not= 0 (:exit (exec! cmd {:timeout-ms 20000})))]))]
-    ;; this process is NOT sandboxed, so it can clean up whatever leaked through
-    (doseq [m probe-marks] (try (fs/unlinkSync m) (catch :default _ nil)))
-    {:backing exec-backing
-     :blocked (mapv first (filter second results))
-     :leaked  (mapv first (remove second results))}))
+  ;; The read marker makes an empty private mount distinguishable from the real
+  ;; home. It is removed even when a probe throws.
+  (fs/writeFileSync (:home-read probe-paths) "private\n")
+  (try
+    (let [results
+          (doall
+           (for [{:keys [id cmd host-mark]} (escape-probes)]
+             (let [exit (:exit (exec! cmd {:timeout-ms 20000}))
+                   blocked? (if host-mark
+                              (not (fs/existsSync host-mark))
+                              (not= 0 exit))]
+               [id blocked?])))]
+      {:backing exec-backing
+       :blocked (mapv first (filter second results))
+       :leaked  (mapv first (remove second results))})
+    (finally
+      ;; this process is NOT sandboxed, so it can clean up whatever leaked
+      ;; through the deliberately disabled negative-control backing.
+      (doseq [m (vals probe-paths)]
+        (try (fs/unlinkSync m) (catch :default _ nil))))))
 
 (defn- verify-backing! []
   (let [{:keys [leaked] :as p} (probe-backing)]
     (log "  exec backing:" (name exec-backing)
-         "blocked" (count (:blocked p)) "/" (count escape-probes))
+         "blocked" (count (:blocked p)) "/" (count (escape-probes)))
     (when (and (seq leaked) (not= :none exec-backing))
       ;; fail closed: a backing that does not hold is not a backing
       (throw (ex-info (str "exec backing failed to contain: " (pr-str leaked)) p)))
@@ -287,6 +345,9 @@
   (if-let [prepared @kotoba-provider]
     (kcm-provider/verify-prepared! spec prepared)
     (let [prepared (kcm-provider/prepare! spec root)]
+      (reset! probe-node
+              (path/join (:root prepared)
+                         (get-in prepared [:manifest :entry :runtime-node])))
       (reset! kotoba-provider prepared)
       prepared)))
 
@@ -672,6 +733,7 @@
   (ctx-window!)
   (extract!)
   (install-backing!)
+  (when kcm-mode? (resolve-kotoba-provider!))
   (let [probe (verify-backing!)      ; throws before any model call if it leaks
         outcome (try (run-loop!) (catch :default e {:stop :error :error (.-message e) :turns 0}))
         ;; A final authoritative check pass — the gate must not trust the
@@ -746,6 +808,7 @@
     (throw (ex-info "--kcm-probe requires a KCM spec" {})))
   (extract!)
   (install-backing!)
+  (resolve-kotoba-provider!)
   (let [backing (verify-backing!)
         first-pass (mapv (fn [c]
                            (run-kcm-check! c)
