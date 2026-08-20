@@ -47,7 +47,7 @@
     {:git/url "https://github.com/kotoba-lang/org-ietf-cbor.git"
      :git/sha "de18ad29102f9df150e214d756de4719c3c00d7a"}}}
   :kotoba-compiler
-  {:replace-deps {io.github.kotoba-lang/compiler
-                  {:git/url "https://github.com/kotoba-lang/compiler.git"
+  {:replace-deps {io.github.kotoba-lang/amu
+                  {:git/url "https://github.com/kotoba-lang/amu.git"
                    :git/sha "78f43e64125e9c4bbe2bfb3a9520ae4b767dc275"}}
    :main-opts ["-m" "kotoba.compiler.cli"]}}}
