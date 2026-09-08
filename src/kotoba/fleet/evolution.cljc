@@ -4,7 +4,7 @@
   This is deliberately a policy library, not an agent: agents may propose a
   candidate, but this namespace never merges code or changes a model registry.
   The caller records its result through `kotoba.fleet.governor`'s single writer."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def required-attestations
   #{:council-charter-attestation
