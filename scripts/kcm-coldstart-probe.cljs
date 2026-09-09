@@ -8,7 +8,7 @@
             ["node:os" :as os]
             ["node:path" :as path]
             [cljs.reader :as reader]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def tmp (fs/mkdtempSync (path/join (os/tmpdir) "kcm-coldstart-")))
 (def repo (path/join tmp "repo"))

@@ -34,7 +34,7 @@
   (:require ["node:fs" :as fs]
             ["node:path" :as path]
             ["node:child_process" :as cp]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [cljs.reader :as reader]
             [fleet.kcm :as kcm]
             [fleet.kcm-provider :as kcm-provider]))
@@ -402,7 +402,7 @@
     (when-not (string? old_string) (throw (ex-info "old_string must be a string" {})))
     (when-not (fs/existsSync abs) (throw (ex-info (str "no such file: " path) {})))
     (let [content (fs/readFileSync abs "utf8")
-          occ (count (re-seq (re-pattern (str/replace old_string #"[.*+?^${}()|\[\]\\]" "\\$&"))
+          occ (count (re-seq (re-pattern (str/re-quote old_string))
                              content))]
       (cond
         (zero? occ) (str "ERROR: old_string not found in " path)

@@ -11,7 +11,7 @@
   `sandbox_agent.cljs` deliberately keeps its own copies: it is scp'd to a node
   and run standalone, so it must not require anything."
   (:require ["node:child_process" :as cp]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 ;; ── args ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@
   [{:keys [url method headers body timeout-sec] :or {method :get timeout-sec 60}}]
   (let [hdr (mapcat (fn [[k v]] ["-H" (str (name k) ": " v)]) headers)
         args (concat ["-sS" "--max-time" (str timeout-sec) "-w" "\n%{http_code}"
-                      "-X" (str/upper-case (name method)) url]
+                      "-X" (str/upper (name method)) url]
                      hdr
                      (when body ["--data-binary" body]))
         {:keys [exit out]} (sh-status "curl" (vec args))]

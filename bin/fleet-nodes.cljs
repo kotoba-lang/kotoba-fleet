@@ -17,7 +17,7 @@
         [--nodes a,b,c | --fleet-edn <murakumo fleet.edn>] [--requires nbb,git]
         [--shallow] [--out nodes.edn]"
   (:require ["node:fs" :as fs]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [fleet.cli :as cli]
             [fleet.node :as node]))
 

@@ -17,7 +17,7 @@
         [--identity kagi:<item>] [--approve <proposal-id>]"
   (:require ["node:fs" :as fs]
             ["node:path" :as path]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [cljs.reader :as reader]
             [fleet.cli :as cli]
             [fleet.dispatch :as dispatch]

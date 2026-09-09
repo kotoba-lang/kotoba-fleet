@@ -3,7 +3,7 @@
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             ["node:path" :as path]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [fleet.kcm :as kcm]
             [fleet.kcm-provider :as provider]))
 
@@ -12,7 +12,7 @@
 (def pilot-share-format :kotoba-kcm-pilot-share/v1)
 
 (defn- sensitive-source-path? [relative]
-  (let [lower (str/lower-case relative)
+  (let [lower (str/lower relative)
         parts (str/split lower #"/")
         base (last parts)]
     (or (some #{".ssh" ".aws" ".gnupg"} parts)

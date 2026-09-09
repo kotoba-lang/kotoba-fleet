@@ -16,7 +16,7 @@
   show latest state (ADR-2607257000) explicitly keeps append-only for signed
   event streams — a receipt records that a decision happened at a point in
   time, and rewriting it destroys exactly the thing a signature is for."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [fleet.cli :as cli]
             [fleet.github :as gh]
             [fleet.identity :as fid]))

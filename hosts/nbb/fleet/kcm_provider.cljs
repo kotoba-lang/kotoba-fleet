@@ -11,7 +11,7 @@
             ["node:fs" :as fs]
             ["node:path" :as path]
             [cljs.reader :as reader]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [fleet.kcm :as kcm]))
 
 (def manifest-format :kotoba-provider/v1)

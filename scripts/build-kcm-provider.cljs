@@ -14,7 +14,7 @@
             ["node:os" :as os]
             ["node:path" :as path]
             [cljs.reader :as reader]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [fleet.kcm :as kcm]
             [fleet.kcm-provider :as provider]))
 

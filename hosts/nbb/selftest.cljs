@@ -17,7 +17,7 @@
             ["node:path" :as path]
             ["node:child_process" :as cp]
             ["node:crypto" :as crypto]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [cljs.reader :as reader]
             [fleet.filestore :as filestore]
             [fleet.gate :as gate]

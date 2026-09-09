@@ -4,7 +4,7 @@
   (:require ["node:fs" :as fs]
             ["node:path" :as path]
             [cljs.reader :as reader]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [fleet.identity :as identity]
             [fleet.kcm-provider :as provider]))
 

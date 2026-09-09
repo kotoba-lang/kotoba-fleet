@@ -9,7 +9,7 @@
             ["node:os" :as os]
             ["node:path" :as path]
             [cljs.reader :as reader]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def args (vec *command-line-args*))
 (defn opt [flag default] (or (second (drop-while #(not= flag %) args)) default))

@@ -28,7 +28,7 @@
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             ["node:path" :as path]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def home (or (.-HOME js/process.env) "/Users/junkawasaki"))
 (def root (or (.-FLEET_ROOT js/process.env) (str home "/github/com-junkawasaki")))
