@@ -15,7 +15,7 @@
   - **meets-spec** — the patch did what the TASK asked. A patch can be
     accepted and still be wrong work: deleting the requirement and leaving the
     suite green passes the gate and fails here."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn diff-files [diff]
   (->> (str/split-lines (or diff ""))

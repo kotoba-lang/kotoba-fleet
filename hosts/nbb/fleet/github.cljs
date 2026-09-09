@@ -13,7 +13,7 @@
   local clone: a server-side commit on a known base has no working tree to get
   dirty, no merge to fight, and fails loudly (409/422) instead of silently
   producing a different history."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [fleet.cli :as cli]))
 
 (def api-base "https://api.github.com")

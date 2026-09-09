@@ -8,7 +8,7 @@
   not asserted on the node**: a payload that ran with the exec backing disabled,
   or whose own startup probe leaked, is rejected even when its tests are green.
   Opting out is a property of the work-unit, never of the runtime."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [fleet.kcm :as kcm]))
 
 (defn diff-files

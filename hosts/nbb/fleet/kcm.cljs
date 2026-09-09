@@ -10,7 +10,7 @@
   outer OS backing (Seatbelt today, a container/microVM for higher-risk work)
   remains fleet.sandbox-agent's responsibility."
   (:require ["node:crypto" :as crypto]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def contract-version :kotoba-capability-machine/v1)
 

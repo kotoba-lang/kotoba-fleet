@@ -21,7 +21,7 @@
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             ["node:crypto" :as crypto]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [ed25519.core :as ed]))
 
 (defn- kagi-pem

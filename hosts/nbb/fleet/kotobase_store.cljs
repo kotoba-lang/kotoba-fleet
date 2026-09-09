@@ -24,7 +24,7 @@
   observer converges on the same holder even when ordinals collide."
   (:require ["node:child_process" :as cp]
             ["node:crypto" :as crypto]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [cljs.reader :as edn]
             [cacao.core :as cacao]
             [kotoba.fleet.lease :as lease]
@@ -86,7 +86,7 @@
   (let [hdr (mapcat (fn [[k v]] ["-H" (str k ": " v)]) headers)
         out (try (cp/execFileSync
                   "curl" (clj->js (concat ["-sS" "--max-time" "60" "-w" "\n%{http_code}"
-                                           "-X" (str/upper-case (name method)) url]
+                                           "-X" (str/upper (name method)) url]
                                           hdr ["--data-binary" body]))
                   #js {:encoding "utf8" :maxBuffer 33554432})
                  (catch :default e (str (.-message e) "\n599")))

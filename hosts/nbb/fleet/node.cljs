@@ -14,7 +14,7 @@
   contain agent-authored code is not eligible for agent work, however much
   toolchain it has."
   (:require ["node:path" :as path]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [cljs.reader :as reader]
             [fleet.cli :as cli]))
 

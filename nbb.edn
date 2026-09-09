@@ -1,0 +1,10 @@
+;; nbb reads this file and does NOT read deps.edn. The .cljs in this repo are
+;; run as bare `nbb <script>` with no --classpath, so a coordinate that lives
+;; only in deps.edn is invisible to them: measured 2026-09-09, after the
+;; clojure.string -> kotoba.lang.text migration wrote the dependency to
+;; deps.edn and `nbb tools/coverage_report.cljs` answered
+;; "Could not find namespace: kotoba.lang.text".
+;;
+;; :paths mirrors deps.edn's rather than being invented.
+{:paths ["src" "hosts/nbb"]
+ :deps {io.github.kotoba-lang/text {:git/sha "2ee6dce2ca944decd001f9378868dd703fc3e741"}}}

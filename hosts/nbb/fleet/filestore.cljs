@@ -18,7 +18,7 @@
   Host-owned I/O only: the coordination logic stays in the portable `.cljc`."
   (:require ["node:fs" :as fs]
             ["node:path" :as path]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [cljs.reader :as reader]))
 
 (def ^:private lock-stale-ms
