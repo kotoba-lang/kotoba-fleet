@@ -10,7 +10,7 @@
             → gate → sign-off → materialize → signed receipt → published ledger
 
   Usage:
-    nbb --classpath src:hosts/nbb:<libs> bin/fleet-sandbox-dispatch.cljs \\
+    nbb --classpath src:hosts/nbb:<libs> bin/fleet-sandbox-dispatch.cljk \\
         --work examples/work-kotoba-delta.edn [--agent a1]
         [--store file|kotobase] [--log .fleet/log.edn] [--db-name fleet-log]
         [--node <name>|auto] [--materialize dry-run|push|none] [--publish]
@@ -31,7 +31,7 @@
 (def agent-name (cli/opt "--agent" (str "agent-" (.-pid js/process))))
 (def log-path (cli/opt "--log" (path/resolve ".fleet/log.edn")))
 (def state-dir (path/dirname (path/resolve log-path)))
-(def agent-src (cli/opt "--agent-src" "hosts/nbb/fleet/sandbox_agent.cljs"))
+(def agent-src (cli/opt "--agent-src" "hosts/nbb/fleet/sandbox_agent.cljk"))
 
 (defn- authorized-signoff-dids
   "Who may sign off. Defaults to the DIDs enrolled in the fleet agent registry

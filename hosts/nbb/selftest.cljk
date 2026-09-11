@@ -11,7 +11,7 @@
   spawns REAL concurrent nbb processes (not threads in one runtime) against one
   log file and asserts exactly one winner.
 
-  Run:  nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljs"
+  Run:  nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljk"
   (:require ["node:fs" :as fs]
             ["node:os" :as os]
             ["node:path" :as path]
@@ -76,7 +76,7 @@
       ;; load them just dies silently and looks like a lost race
       cp-arg (or (second (drop-while #(not= "--classpath" %) argv)) "src:hosts/nbb")
       cmd (str "for i in 1 2 3 4 5 6 7 8; do "
-               "nbb --classpath '" cp-arg "' hosts/nbb/selftest.cljs "
+               "nbb --classpath '" cp-arg "' hosts/nbb/selftest.cljk "
                "--claim-child agent-$i --log " log " & done; wait")
       out (cp/execFileSync "sh" #js ["-c" cmd] #js {:encoding "utf8" :maxBuffer 8388608})
       results (->> (str/split-lines out) (remove str/blank?) (mapv reader/read-string))
@@ -140,7 +140,7 @@
 (println "\n5. exec backing contains agent-authored code")
 (let [probe (reader/read-string
              (cp/execFileSync "nbb" #js ["--classpath" "hosts/nbb"
-                                           "hosts/nbb/fleet/sandbox_agent.cljs" "--exec-probe"]
+                                           "hosts/nbb/fleet/sandbox_agent.cljk" "--exec-probe"]
                               #js {:encoding "utf8"}))]
   (check "backing is sandbox-exec" (= :sandbox-exec (:backing probe)) (pr-str (:backing probe)))
   (check "every escape is blocked (home read, ssh keys, network, outside write)"
@@ -258,7 +258,7 @@
 
 (println "\n10. sandbox path confinement")
 (let [out (cp/execFileSync "nbb" #js ["--classpath" "hosts/nbb"
-                                       "hosts/nbb/fleet/sandbox_agent.cljs" "--selftest"]
+                                       "hosts/nbb/fleet/sandbox_agent.cljk" "--selftest"]
                            #js {:encoding "utf8"})]
   (print out)
   (when-not (str/includes? out "confinement ok") (swap! failures inc)))

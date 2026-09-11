@@ -1,4 +1,4 @@
-;; One work-unit for bin/fleet-sandbox-dispatch.cljs.
+;; One work-unit for bin/fleet-sandbox-dispatch.cljk.
 ;;
 ;; :pin is the commit the sandbox is built from — the dispatcher fetches THIS
 ;; sha fresh from the GitHub API, never a local checkout (which drifts). Keep it

@@ -1,10 +1,10 @@
 #!/usr/bin/env nbb
 ;; run-fleet-tick.cljs — one bounded tick of the kotoba-fleet coding agent.
 ;;
-;; The tick itself is `kotoba-fleet/bin/fleet-tick.cljs`; this launcher only
+;; The tick itself is `kotoba-fleet/bin/fleet-tick.cljk`; this launcher only
 ;; supplies the things a scheduler cannot infer — repo root, classpath, and the
 ;; standing policy for unattended runs — so the scheduled path and a hand-run
-;; `bin/fleet-tick.cljs` stay the same code (ADR-2607252600).
+;; `bin/fleet-tick.cljk` stay the same code (ADR-2607252600).
 ;;
 ;; Standing policy for UNATTENDED runs, deliberately conservative:
 ;;   --materialize dry-run   the tick never pushes and never opens a PR on its
@@ -22,7 +22,7 @@
 ;;                           instead of a single tick occupying the fleet.
 ;;
 ;; The queue is ~/.gftd/fleet-queue/*.edn — the same work-unit shape
-;; bin/fleet-sandbox-dispatch.cljs takes. An empty queue makes this a no-op, so
+;; bin/fleet-sandbox-dispatch.cljk takes. An empty queue makes this a no-op, so
 ;; installing the timer costs nothing until work is put in it.
 (ns run-fleet-tick
   (:require ["node:child_process" :as cp]
@@ -51,7 +51,7 @@
   (let [units (->> (fs/readdirSync queue) (filter #(str/ends-with? % ".edn")))]
     (if (empty? units)
       (log! "queue empty — nothing to do")
-      (let [args ["--classpath" classpath "bin/fleet-tick.cljs"
+      (let [args ["--classpath" classpath "bin/fleet-tick.cljk"
                   "--work-dir" queue
                   "--max" (or (.-FLEET_TICK_MAX js/process.env) "1")
                   "--store" (or (.-FLEET_TICK_STORE js/process.env) "file")

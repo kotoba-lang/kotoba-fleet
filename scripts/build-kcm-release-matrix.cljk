@@ -80,7 +80,7 @@
              (fs/copyFileSync "scripts/install-kcm-provider.mjs"
                               (path/join platform-out "install-kcm-provider.mjs"))
              (let [raw (run "nbb" ["--classpath" "hosts/nbb"
-                                    "scripts/build-kcm-provider.cljs"
+                                    "scripts/build-kcm-provider.cljk"
                                     "--compiler" compiler "--out" prefix
                                     "--runtime-node" (path/join extracted "bin/node")
                                     "--runtime-license" (path/join extracted "LICENSE")])

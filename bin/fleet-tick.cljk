@@ -14,7 +14,7 @@
   nodes ONCE and reuses the capability set for every unit in the tick.
 
   Usage:
-    nbb --classpath src:hosts/nbb:<libs> bin/fleet-tick.cljs \\
+    nbb --classpath src:hosts/nbb:<libs> bin/fleet-tick.cljk \\
         --work-dir examples/work/ [--max 3] [--store kotobase] [--db-name fleet-log]
         [--nodes a,b,c | --fleet-edn <path>] [--materialize dry-run|push|none]
         [--publish] [--identity kagi:<item>]"
@@ -32,7 +32,7 @@
 (def max-units (js/parseInt (cli/opt "--max" "3")))
 (def log-path (cli/opt "--log" (path/resolve ".fleet/log.edn")))
 (def state-dir (path/dirname (path/resolve log-path)))
-(def agent-src (cli/opt "--agent-src" "hosts/nbb/fleet/sandbox_agent.cljs"))
+(def agent-src (cli/opt "--agent-src" "hosts/nbb/fleet/sandbox_agent.cljk"))
 (def started (js/Date.now))
 
 (defn- work-specs []

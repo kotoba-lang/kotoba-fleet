@@ -13,7 +13,7 @@
   agent work no matter how much toolchain it has.
 
   Usage:
-    nbb --classpath src:hosts/nbb bin/fleet-nodes.cljs \\
+    nbb --classpath src:hosts/nbb bin/fleet-nodes.cljk \\
         [--nodes a,b,c | --fleet-edn <murakumo fleet.edn>] [--requires nbb,git]
         [--shallow] [--out nodes.edn]"
   (:require ["node:fs" :as fs]
@@ -32,7 +32,7 @@
 (def caps
   (mapv (fn [n]
           (cli/say (str "probing " n " …"))
-          (node/probe n {:agent-path (cli/opt "--agent-src" "hosts/nbb/fleet/sandbox_agent.cljs")
+          (node/probe n {:agent-path (cli/opt "--agent-src" "hosts/nbb/fleet/sandbox_agent.cljk")
                          :deep? (not (cli/flag? "--shallow"))}))
         names))
 

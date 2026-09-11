@@ -75,14 +75,14 @@ injects a **sandboxed session on a murakumo fleet node** instead of a terminal
 on the operator's laptop — ADR-2606302000's F3/F4 stages:
 
 ```bash
-nbb --classpath src:hosts/nbb bin/fleet-sandbox-dispatch.cljs \
+nbb --classpath src:hosts/nbb bin/fleet-sandbox-dispatch.cljk \
     --work examples/work-kotoba-delta.edn --agent a1 --log .fleet/log.edn
 ```
 
 ```
 lease (kotoba.fleet.lease)
   └─ run = pinned tarball from the GitHub API → scp → ssh node
-           → hosts/nbb/fleet/sandbox_agent.cljs (ReAct loop vs murakumo-main)
+           → hosts/nbb/fleet/sandbox_agent.cljk (ReAct loop vs murakumo-main)
        └─ proposal (kotoba.fleet.governor/submit-proposal!)
             └─ gate → materialize (single writer) → receipt
 ```
@@ -141,12 +141,12 @@ Build and verify the provider without installing a system-wide CLI:
 
 ```sh
 npm ci --ignore-scripts --omit=optional --prefix ../compiler
-nbb --classpath hosts/nbb scripts/build-kcm-provider.cljs \
+nbb --classpath hosts/nbb scripts/build-kcm-provider.cljk \
   --compiler ../compiler --out /tmp/kotoba-provider \
   --runtime-node /path/to/official-node/bin/node \
   --runtime-license /path/to/official-node/LICENSE
-nbb scripts/kcm-coldstart-probe.cljs
-nbb scripts/kcm-node-probe.cljs --node naphtali
+nbb scripts/kcm-coldstart-probe.cljk
+nbb scripts/kcm-node-probe.cljk --node naphtali
 ```
 
 For a first customer evaluation, the repository, compiler checkout, and an
@@ -157,7 +157,7 @@ runs every declared check twice (cold miss or prior hit, then a verified hit),
 runs declared builds, and emits one content-addressed EDN report:
 
 ```sh
-nbb --classpath hosts/nbb bin/kcm-evaluate.cljs \
+nbb --classpath hosts/nbb bin/kcm-evaluate.cljk \
   --repo examples/kcm-evaluate \
   --policy examples/kcm-evaluate/policy.edn \
   --compiler ../compiler \
@@ -223,14 +223,14 @@ Release descriptors are signed by the dedicated Kagi identity
 `kcm-provider-release-ed25519-v1`; the installer trusts only
 `did:key:z6MknAaLaoj8doPeDrPgszg199YG8kZreH2D3UrWAmLcwgYM`. A signer, descriptor,
 archive, manifest, runtime, or installed immutable-release substitution fails
-closed. `scripts/sign-kcm-provider-release.cljs` is the release-side producer;
+closed. `scripts/sign-kcm-provider-release.cljk` is the release-side producer;
 `scripts/install-kcm-provider.mjs` is the standalone consumer.
 
 Release maintainers build the platform matrix from SHA-256-verified official
 Node archives rather than from the machine's ambient runtime:
 
 ```sh
-nbb scripts/build-kcm-release-matrix.cljs \
+nbb scripts/build-kcm-release-matrix.cljk \
   --compiler ../compiler --out build/kcm-release \
   --platforms darwin-arm64,linux-arm64,linux-x64
 ```
@@ -253,21 +253,21 @@ reported as `:legacy-sandbox`.
 
 | piece | file | role |
 |---|---|---|
-| file-backed `:db-api` | `hosts/nbb/fleet/filestore.cljs` | the same append-only contract as `MemStore`, but shared by separate OS processes (ordinal assigned under a lock — the file analogue of `swap!`) |
-| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljs` | runs **on the node**: KCM typed tools (or the legacy allowlisted test command), exact no-shell Kotoba providers under an OS-level exec backing, enforced budgets, emits a patch |
-| KCM contract | `hosts/nbb/fleet/kcm.cljs` | canonical machine/cache identity, closed HostCaps vocabulary, check-argument validation |
-| KCM provider | `hosts/nbb/fleet/kcm_provider.cljs` | archive/runtime/manifest/tree verification and exact provider argv |
-| admission rules | `hosts/nbb/fleet/gate.cljs` | pure governor rules — lease holder, protected paths, green tests, **exec backing** |
-| dispatcher | `bin/fleet-sandbox-dispatch.cljs` | lease → remote run → proposal → gate → materialize → receipt |
-| the flow | `hosts/nbb/fleet/dispatch.cljs` | one work-unit end to end — shared by the interactive dispatcher and the tick, so they cannot drift |
-| plumbing | `hosts/nbb/fleet/cli.cljs` / `github.cljs` | argv, processes, HTTP; and the one place that talks to GitHub (explicit token or anonymous, never an ambient login) |
-| receipts | `hosts/nbb/fleet/receipt.cljs` | the signed decision shape, the sign-off rule, and the published ledger |
-| nodes | `hosts/nbb/fleet/node.cljs` + `bin/fleet-nodes.cljs` | measure what each machine can do, and pick one |
-| standing tick | `bin/fleet-tick.cljs` | one bounded pass over the work queue |
-| shared log | `hosts/nbb/fleet/kotobase_store.cljs` | the same `:db-api` on kotobase.net, so the log is shared across MACHINES |
-| agent identity | `hosts/nbb/fleet/identity.cljs` | the dispatcher's own narrow key (kagi) — CACAO auth + signed receipts |
-| observer | `bin/fleet-observe.cljs` | read the fleet log from any machine, with no fleet key |
-| host selftest | `hosts/nbb/selftest.cljs` | 8 concurrent OS processes race one lease; gate admission matrix; exec-backing containment; identity + receipt signatures; graph derivation; path confinement |
+| file-backed `:db-api` | `hosts/nbb/fleet/filestore.cljk` | the same append-only contract as `MemStore`, but shared by separate OS processes (ordinal assigned under a lock — the file analogue of `swap!`) |
+| sandboxed agent | `hosts/nbb/fleet/sandbox_agent.cljk` | runs **on the node**: KCM typed tools (or the legacy allowlisted test command), exact no-shell Kotoba providers under an OS-level exec backing, enforced budgets, emits a patch |
+| KCM contract | `hosts/nbb/fleet/kcm.cljk` | canonical machine/cache identity, closed HostCaps vocabulary, check-argument validation |
+| KCM provider | `hosts/nbb/fleet/kcm_provider.cljk` | archive/runtime/manifest/tree verification and exact provider argv |
+| admission rules | `hosts/nbb/fleet/gate.cljk` | pure governor rules — lease holder, protected paths, green tests, **exec backing** |
+| dispatcher | `bin/fleet-sandbox-dispatch.cljk` | lease → remote run → proposal → gate → materialize → receipt |
+| the flow | `hosts/nbb/fleet/dispatch.cljk` | one work-unit end to end — shared by the interactive dispatcher and the tick, so they cannot drift |
+| plumbing | `hosts/nbb/fleet/cli.cljk` / `github.cljs` | argv, processes, HTTP; and the one place that talks to GitHub (explicit token or anonymous, never an ambient login) |
+| receipts | `hosts/nbb/fleet/receipt.cljk` | the signed decision shape, the sign-off rule, and the published ledger |
+| nodes | `hosts/nbb/fleet/node.cljk` + `bin/fleet-nodes.cljk` | measure what each machine can do, and pick one |
+| standing tick | `bin/fleet-tick.cljk` | one bounded pass over the work queue |
+| shared log | `hosts/nbb/fleet/kotobase_store.cljk` | the same `:db-api` on kotobase.net, so the log is shared across MACHINES |
+| agent identity | `hosts/nbb/fleet/identity.cljk` | the dispatcher's own narrow key (kagi) — CACAO auth + signed receipts |
+| observer | `bin/fleet-observe.cljk` | read the fleet log from any machine, with no fleet key |
+| host selftest | `hosts/nbb/selftest.cljk` | 8 concurrent OS processes race one lease; gate admission matrix; exec-backing containment; identity + receipt signatures; graph derivation; path confinement |
 
 ### Landing a patch, and who decides
 
@@ -309,8 +309,8 @@ reproducing a patch a human already approved, and might not reproduce it.
 ### Which machine runs it
 
 ```bash
-nbb --classpath … bin/fleet-nodes.cljs --nodes a,b,c --requires nbb,git
-… bin/fleet-sandbox-dispatch.cljs --work w.edn --node auto --nodes a,b,c
+nbb --classpath … bin/fleet-nodes.cljk --nodes a,b,c --requires nbb,git
+… bin/fleet-sandbox-dispatch.cljk --work w.edn --node auto --nodes a,b,c
 ```
 
 A work-unit declares what it NEEDS (`:requires #{:nbb :git}`) and the fleet
@@ -329,7 +329,7 @@ judah     caps=clojure,git,jdk,node,sandbox-exec  exec=unprobed   (no nbb)
 ### Standing tick
 
 ```bash
-nbb --classpath … bin/fleet-tick.cljs --work-dir examples --max 3 \
+nbb --classpath … bin/fleet-tick.cljk --work-dir examples --max 3 \
     --store kotobase --db-name fleet-log --nodes naphtali,asher --publish
 ```
 
@@ -344,7 +344,7 @@ to stay alive.
 schedule itself):
 
 ```bash
-cp deploy/run-fleet-tick.cljs ~/.gftd/
+cp deploy/run-fleet-tick.cljk ~/.gftd/
 sed -e "s|__HOME__|$HOME|g" -e "s|__FLEET_ROOT__|$HOME/github/com-junkawasaki|"     deploy/com.gftd.fleet-tick.plist.tmpl > ~/Library/LaunchAgents/com.gftd.fleet-tick.plist
 launchctl load ~/Library/LaunchAgents/com.gftd.fleet-tick.plist
 ```
@@ -368,11 +368,11 @@ receipt in 59s, and the agent read the vault key fine under launchd.
 
 ```bash
 # one machine
-… bin/fleet-sandbox-dispatch.cljs --work w.edn --store file --log .fleet/log.edn
+… bin/fleet-sandbox-dispatch.cljk --work w.edn --store file --log .fleet/log.edn
 # the fleet (shared across machines)
-… bin/fleet-sandbox-dispatch.cljs --work w.edn --store kotobase --db-name fleet-log
+… bin/fleet-sandbox-dispatch.cljk --work w.edn --store kotobase --db-name fleet-log
 # watch it from anywhere, holding no fleet key
-nbb --classpath … bin/fleet-observe.cljs --db-name fleet-log --graph <cid> --unit <unit>
+nbb --classpath … bin/fleet-observe.cljk --db-name fleet-log --graph <cid> --unit <unit>
 ```
 
 `--store kotobase` puts the append-only log on kotobase.net's tenant Datom
@@ -416,7 +416,7 @@ enrolled DID rather than trusted because of where it was found.
 ### How capable is the agent, measured
 
 ```bash
-nbb --classpath … bin/fleet-eval.cljs --tasks examples/eval --reps 3 --node naphtali
+nbb --classpath … bin/fleet-eval.cljk --tasks examples/eval --reps 3 --node naphtali
 ```
 
 Four graded tasks against a real repo at a pinned commit, each run N times
@@ -476,7 +476,7 @@ room for.
 ### Which agent runtime is canonical
 
 **nbb** (owner decision, 2026-07-25). The production `run` is
-`hosts/nbb/fleet/sandbox_agent.cljs` on a fleet node — not the JVM
+`hosts/nbb/fleet/sandbox_agent.cljk` on a fleet node — not the JVM
 `kotoba-code` session the seam originally named. This is also the runtime this
 repo prefers: the priority chain is kotoba wasm → clojurewasm → ClojureScript →
 nbb, with the JVM demoted to a last resort.
@@ -510,8 +510,8 @@ probe leaked — even when the tests are green. Opting out is a property of the
 work-unit (`:allow-unsandboxed-exec`), never of the runtime.
 
 ```bash
-nbb hosts/nbb/fleet/sandbox_agent.cljs --exec-probe                  # what does this host contain?
-nbb hosts/nbb/fleet/sandbox_agent.cljs --exec-probe --backing none   # negative control
+nbb hosts/nbb/fleet/sandbox_agent.cljk --exec-probe                  # what does this host contain?
+nbb hosts/nbb/fleet/sandbox_agent.cljk --exec-probe --backing none   # negative control
 ```
 
 Measured on fleet node `naphtali` (macOS 26.2): with the backing, all seven
@@ -544,7 +544,7 @@ inspection — nothing is pushed.
 clojure -M:lint          # clj-kondo (errors fail)
 clojure -M:test          # cognitect test-runner — contract tests
 node scripts/kcm-provider-installer-selftest.mjs  # signed descriptor trust boundary
-nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljs   # nbb host invariants
+nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljk   # nbb host invariants
 ```
 
 `.cljc` keeps `edn`/`Exception` `#?(:clj …/:cljs …)`-conditional so the core runs
