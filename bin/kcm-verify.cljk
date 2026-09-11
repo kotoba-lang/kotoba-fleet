@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns kcm-verify
   "Offline verification for a signed KCM pilot EDN receipt."
   (:require ["node:fs" :as fs]

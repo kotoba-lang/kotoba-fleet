@@ -1,8 +1,8 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns build-kcm-provider
   "Build a self-contained, content-addressed Kotoba compiler provider.
 
-  Usage: nbb --classpath hosts/nbb scripts/build-kcm-provider.cljk
+  Usage: kbb --backend sci --classpath hosts/nbb scripts/build-kcm-provider.cljk
            --compiler ../compiler --out /tmp/kotoba-provider
 
   The checked-in dependency lock is the authority. Each dependency checkout is

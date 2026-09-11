@@ -10,7 +10,7 @@
  :node    "naphtali"
  :requires #{:nbb :git}
  :allow-push true
- :test-cmd "nbb --classpath src:test run-tests.cljs"
+ :test-cmd "kbb --backend sci --classpath src:test run-tests.cljs"
  :ttl-ms  1800000
  :protected-paths [".github/" ".git/" "package.json" "package-lock.json"]
  :budget  {:max-turns 12 :max-tool-calls 30 :max-tokens 4000

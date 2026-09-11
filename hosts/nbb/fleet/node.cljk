@@ -68,7 +68,7 @@
                            (scp! node kcm-path (str remote-root "/fleet/kcm.cljs"))
                            (scp! node provider-path (str remote-root "/fleet/kcm_provider.cljs")))
                        (catch :default _ nil))
-                {:keys [exit out]} (ssh node (str "cd " remote-root " && nbb sandbox_agent.cljs --exec-probe; rm -rf " remote-root)
+                {:keys [exit out]} (ssh node (str "cd " remote-root " && kbb --backend sci sandbox_agent.cljk --exec-probe; rm -rf " remote-root)
                                         {:timeout-sec 180})
                 result (when (zero? exit)
                          (try (reader/read-string (str/trim (last (remove str/blank? (str/split-lines out)))))

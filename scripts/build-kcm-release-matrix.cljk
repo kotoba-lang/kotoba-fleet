@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns build-kcm-release-matrix
   "Build KCM provider assets from SHA-256-verified official Node distributions.
 

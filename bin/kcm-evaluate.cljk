@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns kcm-evaluate
   "Evaluate a source tree under an explicit KCM policy and emit an auditable
   EDN report. This is the local, no-model customer entrypoint."

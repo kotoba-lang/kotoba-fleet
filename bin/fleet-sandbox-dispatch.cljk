@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns fleet-sandbox-dispatch
   "Dispatch one work-unit to a sandboxed coding agent on a murakumo fleet node.
 
@@ -10,7 +10,7 @@
             → gate → sign-off → materialize → signed receipt → published ledger
 
   Usage:
-    nbb --classpath src:hosts/nbb:<libs> bin/fleet-sandbox-dispatch.cljk \\
+    kbb --backend sci --classpath src:hosts/nbb:<libs> bin/fleet-sandbox-dispatch.cljk \\
         --work examples/work-kotoba-delta.edn [--agent a1]
         [--store file|kotobase] [--log .fleet/log.edn] [--db-name fleet-log]
         [--node <name>|auto] [--materialize dry-run|push|none] [--publish]

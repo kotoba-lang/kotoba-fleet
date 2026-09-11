@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Fleet observer — read the shared coordination log from ANOTHER machine.
 ;;
 ;; It holds no fleet key: it mints a CACAO with a throwaway identity of its own

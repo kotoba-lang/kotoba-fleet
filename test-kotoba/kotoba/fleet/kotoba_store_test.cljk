@@ -1,7 +1,7 @@
 (ns kotoba.fleet.kotoba-store-test
   "Contract parity: the same fleet lease / agent / governor flow that passes on
   MemStore also passes on a langchain.db-backed store via the db-api adapter —
-  the MemStore ≡ real-Datom-backend guarantee. Run: clojure -M:kotoba
+  the MemStore ≡ real-Datom-backend guarantee. Run: kbb -M:kotoba
   (langchain.db stands in for the kotobase.net XRPC backend; both implement the
   identical {:q :transact! :db :pull :entid} db-api map)."
   (:require [clojure.test :refer [deftest is testing]]
