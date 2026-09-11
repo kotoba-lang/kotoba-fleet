@@ -10,7 +10,7 @@
  :pin     "c8c405abda731e5889aff3ae2a18ac208b375bb5"
  :node    "naphtali"
  :requires #{:nbb :git}
- :test-cmd "nbb --classpath src:test run-tests.cljs"
+ :test-cmd "kbb --backend sci --classpath src:test run-tests.cljs"
  :ttl-ms  1800000
  :protected-paths [".github/" ".git/" "package.json"]
  :signoff-paths ["test/"]

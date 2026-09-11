@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; run-fleet-tick.cljs — one bounded tick of the kotoba-fleet coding agent.
 ;;
 ;; The tick itself is `kotoba-fleet/bin/fleet-tick.cljk`; this launcher only

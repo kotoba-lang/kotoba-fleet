@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns fleet-nodes
   "What can each machine in the fleet actually do?
 
@@ -13,7 +13,7 @@
   agent work no matter how much toolchain it has.
 
   Usage:
-    nbb --classpath src:hosts/nbb bin/fleet-nodes.cljk \\
+    kbb --backend sci --classpath src:hosts/nbb bin/fleet-nodes.cljk \\
         [--nodes a,b,c | --fleet-edn <murakumo fleet.edn>] [--requires nbb,git]
         [--shallow] [--out nodes.edn]"
   (:require ["node:fs" :as fs]

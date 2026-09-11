@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns sign-kcm-provider-release
   "Create an Ed25519-signed, content-bound provider release descriptor."
   (:require ["node:fs" :as fs]

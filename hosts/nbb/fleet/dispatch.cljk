@@ -108,7 +108,7 @@
     (node/scp! node-name local-spec (str remote-root "/"))
     (cli/say (str "  running sandbox on " node-name ":" remote-root " …"))
     (let [{:keys [exit out]} (node/ssh node-name
-                                       (str "cd " remote-root " && nbb sandbox_agent.cljs --spec "
+                                       (str "cd " remote-root " && kbb --backend sci sandbox_agent.cljk --spec "
                                             remote-root "/" (path/basename local-spec))
                                        {:timeout-sec 1800})
           body (some-> out (str/split #"===FLEET-RESULT-BEGIN===") second

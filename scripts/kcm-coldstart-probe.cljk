@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns kcm-coldstart-probe
   "Build the real pinned Kotoba provider and measure a cold/warm KCM check.
   Also corrupts a transport copy and proves it is rejected before execution."

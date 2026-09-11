@@ -44,7 +44,7 @@ by swapping the map):
 `kotoba.fleet.kotoba-store/db-api-store` backs the same contract with a langchain
 db-api map (`langchain.db` in-process, or `langchain.kotoba-db` over kotobase.net
 XRPC with CACAO) — so the identical lease/governor/agent code runs on a real
-Datom log. `clojure -M:kotoba` runs the MemStore ≡ backend parity test.
+Datom log. `kbb -M:kotoba` runs the MemStore ≡ backend parity test.
 
 ## Usage
 
@@ -75,7 +75,7 @@ injects a **sandboxed session on a murakumo fleet node** instead of a terminal
 on the operator's laptop — ADR-2606302000's F3/F4 stages:
 
 ```bash
-nbb --classpath src:hosts/nbb bin/fleet-sandbox-dispatch.cljk \
+kbb --backend sci --classpath src:hosts/nbb bin/fleet-sandbox-dispatch.cljk \
     --work examples/work-kotoba-delta.edn --agent a1 --log .fleet/log.edn
 ```
 
@@ -141,12 +141,12 @@ Build and verify the provider without installing a system-wide CLI:
 
 ```sh
 npm ci --ignore-scripts --omit=optional --prefix ../compiler
-nbb --classpath hosts/nbb scripts/build-kcm-provider.cljk \
+kbb --backend sci --classpath hosts/nbb scripts/build-kcm-provider.cljk \
   --compiler ../compiler --out /tmp/kotoba-provider \
   --runtime-node /path/to/official-node/bin/node \
   --runtime-license /path/to/official-node/LICENSE
-nbb scripts/kcm-coldstart-probe.cljk
-nbb scripts/kcm-node-probe.cljk --node naphtali
+kbb --backend sci scripts/kcm-coldstart-probe.cljk
+kbb --backend sci scripts/kcm-node-probe.cljk --node naphtali
 ```
 
 For a first customer evaluation, the repository, compiler checkout, and an
@@ -157,7 +157,7 @@ runs every declared check twice (cold miss or prior hit, then a verified hit),
 runs declared builds, and emits one content-addressed EDN report:
 
 ```sh
-nbb --classpath hosts/nbb bin/kcm-evaluate.cljk \
+kbb --backend sci --classpath hosts/nbb bin/kcm-evaluate.cljk \
   --repo examples/kcm-evaluate \
   --policy examples/kcm-evaluate/policy.edn \
   --compiler ../compiler \
@@ -230,7 +230,7 @@ Release maintainers build the platform matrix from SHA-256-verified official
 Node archives rather than from the machine's ambient runtime:
 
 ```sh
-nbb scripts/build-kcm-release-matrix.cljk \
+kbb --backend sci scripts/build-kcm-release-matrix.cljk \
   --compiler ../compiler --out build/kcm-release \
   --platforms darwin-arm64,linux-arm64,linux-x64
 ```
@@ -309,7 +309,7 @@ reproducing a patch a human already approved, and might not reproduce it.
 ### Which machine runs it
 
 ```bash
-nbb --classpath … bin/fleet-nodes.cljk --nodes a,b,c --requires nbb,git
+kbb --backend sci --classpath … bin/fleet-nodes.cljk --nodes a,b,c --requires nbb,git
 … bin/fleet-sandbox-dispatch.cljk --work w.edn --node auto --nodes a,b,c
 ```
 
@@ -329,7 +329,7 @@ judah     caps=clojure,git,jdk,node,sandbox-exec  exec=unprobed   (no nbb)
 ### Standing tick
 
 ```bash
-nbb --classpath … bin/fleet-tick.cljk --work-dir examples --max 3 \
+kbb --backend sci --classpath … bin/fleet-tick.cljk --work-dir examples --max 3 \
     --store kotobase --db-name fleet-log --nodes naphtali,asher --publish
 ```
 
@@ -372,7 +372,7 @@ receipt in 59s, and the agent read the vault key fine under launchd.
 # the fleet (shared across machines)
 … bin/fleet-sandbox-dispatch.cljk --work w.edn --store kotobase --db-name fleet-log
 # watch it from anywhere, holding no fleet key
-nbb --classpath … bin/fleet-observe.cljk --db-name fleet-log --graph <cid> --unit <unit>
+kbb --backend sci --classpath … bin/fleet-observe.cljk --db-name fleet-log --graph <cid> --unit <unit>
 ```
 
 `--store kotobase` puts the append-only log on kotobase.net's tenant Datom
@@ -416,7 +416,7 @@ enrolled DID rather than trusted because of where it was found.
 ### How capable is the agent, measured
 
 ```bash
-nbb --classpath … bin/fleet-eval.cljk --tasks examples/eval --reps 3 --node naphtali
+kbb --backend sci --classpath … bin/fleet-eval.cljk --tasks examples/eval --reps 3 --node naphtali
 ```
 
 Four graded tasks against a real repo at a pinned commit, each run N times
@@ -510,8 +510,8 @@ probe leaked — even when the tests are green. Opting out is a property of the
 work-unit (`:allow-unsandboxed-exec`), never of the runtime.
 
 ```bash
-nbb hosts/nbb/fleet/sandbox_agent.cljk --exec-probe                  # what does this host contain?
-nbb hosts/nbb/fleet/sandbox_agent.cljk --exec-probe --backing none   # negative control
+kbb --backend sci hosts/nbb/fleet/sandbox_agent.cljk --exec-probe                  # what does this host contain?
+kbb --backend sci hosts/nbb/fleet/sandbox_agent.cljk --exec-probe --backing none   # negative control
 ```
 
 Measured on fleet node `naphtali` (macOS 26.2): with the backing, all seven
@@ -541,10 +541,10 @@ inspection — nothing is pushed.
 ## Build
 
 ```bash
-clojure -M:lint          # clj-kondo (errors fail)
-clojure -M:test          # cognitect test-runner — contract tests
+kbb -M:lint          # clj-kondo (errors fail)
+kbb -M:test          # cognitect test-runner — contract tests
 node scripts/kcm-provider-installer-selftest.mjs  # signed descriptor trust boundary
-nbb --classpath src:hosts/nbb hosts/nbb/selftest.cljk   # nbb host invariants
+kbb --backend sci --classpath src:hosts/nbb hosts/nbb/selftest.cljk   # nbb host invariants
 ```
 
 `.cljc` keeps `edn`/`Exception` `#?(:clj …/:cljs …)`-conditional so the core runs

@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns fleet-tick
   "One bounded tick of the fleet: pick up to N work-units, dispatch each to an
   eligible node, and stop.
@@ -14,7 +14,7 @@
   nodes ONCE and reuses the capability set for every unit in the tick.
 
   Usage:
-    nbb --classpath src:hosts/nbb:<libs> bin/fleet-tick.cljk \\
+    kbb --backend sci --classpath src:hosts/nbb:<libs> bin/fleet-tick.cljk \\
         --work-dir examples/work/ [--max 3] [--store kotobase] [--db-name fleet-log]
         [--nodes a,b,c | --fleet-edn <path>] [--materialize dry-run|push|none]
         [--publish] [--identity kagi:<item>]"

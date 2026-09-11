@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns fleet-eval
   "Measure what the fleet's agent can actually do, on graded tasks, repeated.
 
@@ -13,7 +13,7 @@
   best-of-N because a fleet gets one attempt per work-unit.
 
   Usage:
-    nbb --classpath src:hosts/nbb:<libs> bin/fleet-eval.cljk \\
+    kbb --backend sci --classpath src:hosts/nbb:<libs> bin/fleet-eval.cljk \\
         --tasks examples/eval --reps 3 --node naphtali [--out eval.edn]"
   (:require ["node:fs" :as fs]
             ["node:path" :as path]

@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 (ns fleet.sandbox-agent
   "Sandboxed coding-agent turn — runs ON a murakumo fleet node, never on the
   operator's machine (ADR-2606302000 F3 seam: `run` for kotoba.fleet.agent).
