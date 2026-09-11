@@ -29,7 +29,7 @@
 
 (def build
   (-> (cp/execFileSync
-       "nbb" #js ["--classpath" "hosts/nbb" "scripts/build-kcm-provider.cljs"
+       "nbb" #js ["--classpath" "hosts/nbb" "scripts/build-kcm-provider.cljk"
                    "--compiler" compiler "--out" provider-prefix]
        #js {:encoding "utf8" :maxBuffer 33554432})
       str/split-lines last reader/read-string))
@@ -61,7 +61,7 @@
 
 (let [out (cp/execFileSync
            "nbb" #js ["--classpath" "hosts/nbb"
-                      "hosts/nbb/fleet/sandbox_agent.cljs"
+                      "hosts/nbb/fleet/sandbox_agent.cljk"
                       "--spec" spec-path "--kcm-probe"]
            #js {:encoding "utf8" :maxBuffer 33554432})
       result (reader/read-string (last (str/split-lines out)))
@@ -76,7 +76,7 @@
                           (pr-str (assoc-in base-spec [:kcm/provider :archive] bad-archive)))
       bad (cp/spawnSync
            "nbb" #js ["--classpath" "hosts/nbb"
-                      "hosts/nbb/fleet/sandbox_agent.cljs"
+                      "hosts/nbb/fleet/sandbox_agent.cljk"
                       "--spec" bad-spec-path "--kcm-probe"]
            #js {:encoding "utf8" :maxBuffer 33554432})
       provider-rejected? (and (not= 0 (.-status bad))

@@ -2,7 +2,7 @@
 (ns build-kcm-provider
   "Build a self-contained, content-addressed Kotoba compiler provider.
 
-  Usage: nbb --classpath hosts/nbb scripts/build-kcm-provider.cljs
+  Usage: nbb --classpath hosts/nbb scripts/build-kcm-provider.cljk
            --compiler ../compiler --out /tmp/kotoba-provider
 
   The checked-in dependency lock is the authority. Each dependency checkout is
@@ -33,13 +33,13 @@
 (def fleet-root (path/resolve "."))
 
 (def runner-files
-  ["bin/kcm-evaluate.cljs"
-   "bin/kcm-verify.cljs"
-   "hosts/nbb/fleet/kcm.cljs"
-   "hosts/nbb/fleet/kcm_evaluate.cljs"
-   "hosts/nbb/fleet/kcm_provider.cljs"
-   "hosts/nbb/fleet/kcm_receipt.cljs"
-   "hosts/nbb/fleet/sandbox_agent.cljs"])
+  ["bin/kcm-evaluate.cljk"
+   "bin/kcm-verify.cljk"
+   "hosts/nbb/fleet/kcm.cljk"
+   "hosts/nbb/fleet/kcm_evaluate.cljk"
+   "hosts/nbb/fleet/kcm_provider.cljk"
+   "hosts/nbb/fleet/kcm_receipt.cljk"
+   "hosts/nbb/fleet/sandbox_agent.cljk"])
 
 (defn sh [cmd argv opts]
   (cp/execFileSync cmd (clj->js (if (= cmd "git")
@@ -134,10 +134,10 @@
                           :classpath (vec classpath)
                           :main "compiler/src/kotoba/compiler/nbb/cli.cljs"
                           :runner-classpath ["runner/hosts/nbb"]
-                          :kcm-evaluate "runner/bin/kcm-evaluate.cljs"
-                          :kcm-verify "runner/bin/kcm-verify.cljs"
+                          :kcm-evaluate "runner/bin/kcm-evaluate.cljk"
+                          :kcm-verify "runner/bin/kcm-verify.cljk"
                           :runtime-node "runtime/bin/node"
-                          :sandbox-agent "runner/hosts/nbb/fleet/sandbox_agent.cljs"}
+                          :sandbox-agent "runner/hosts/nbb/fleet/sandbox_agent.cljk"}
                   :files files}
         closure (provider/closure-sha256 manifest)
         archive (str out-prefix ".tar")

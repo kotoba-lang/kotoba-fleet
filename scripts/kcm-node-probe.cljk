@@ -2,7 +2,7 @@
 (ns kcm-node-probe
   "Run the real KCM provider on one Murakumo node without installing anything.
   Every remote artifact lives below a unique /tmp root and is removed after the
-  probe. Usage: nbb scripts/kcm-node-probe.cljs --node naphtali"
+  probe. Usage: nbb scripts/kcm-node-probe.cljk --node naphtali"
   (:require ["node:child_process" :as cp]
             ["node:crypto" :as crypto]
             ["node:fs" :as fs]
@@ -33,7 +33,7 @@
 (let [repo (path/join tmp "repo")
       repo-tar (path/join tmp "repo.tgz")
       spec-file (path/join tmp "spec.edn")
-      build (-> (run "nbb" ["--classpath" "hosts/nbb" "scripts/build-kcm-provider.cljs"
+      build (-> (run "nbb" ["--classpath" "hosts/nbb" "scripts/build-kcm-provider.cljk"
                              "--compiler" compiler "--out" provider-prefix])
                 str/split-lines last reader/read-string)
       runtime-info (-> (ssh "p=$(nbb -e '(println js/process.execPath)' | tail -1); printf '%s ' \"$p\"; shasum -a 256 \"$p\" | awk '{print $1}'")
@@ -67,9 +67,9 @@
         files [[repo-tar "repo.tgz"]
                [(:archive build) "kotoba-provider.tar"]
                [(:manifest build) "kotoba-provider.manifest.edn"]
-               ["hosts/nbb/fleet/sandbox_agent.cljs" "sandbox_agent.cljs"]
-               ["hosts/nbb/fleet/kcm.cljs" "fleet/kcm.cljs"]
-               ["hosts/nbb/fleet/kcm_provider.cljs" "fleet/kcm_provider.cljs"]]]
+               ["hosts/nbb/fleet/sandbox_agent.cljk" "sandbox_agent.cljs"]
+               ["hosts/nbb/fleet/kcm.cljk" "fleet/kcm.cljs"]
+               ["hosts/nbb/fleet/kcm_provider.cljk" "fleet/kcm_provider.cljs"]]]
     (fs/writeFileSync spec-file (str (pr-str spec) "\n"))
     (try
       (ssh (str "rm -rf " remote-root " && mkdir -p " remote-root "/fleet"))

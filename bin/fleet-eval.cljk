@@ -13,7 +13,7 @@
   best-of-N because a fleet gets one attempt per work-unit.
 
   Usage:
-    nbb --classpath src:hosts/nbb:<libs> bin/fleet-eval.cljs \\
+    nbb --classpath src:hosts/nbb:<libs> bin/fleet-eval.cljk \\
         --tasks examples/eval --reps 3 --node naphtali [--out eval.edn]"
   (:require ["node:fs" :as fs]
             ["node:path" :as path]
@@ -46,7 +46,7 @@
         db (filestore/file-store (path/join state-dir (str id ".log.edn")))
         result (try (dispatch/dispatch!
                      {:spec spec' :agent-name (str "eval-" rep) :identity me :db db
-                      :state-dir state-dir :agent-src "hosts/nbb/fleet/sandbox_agent.cljs"
+                      :state-dir state-dir :agent-src "hosts/nbb/fleet/sandbox_agent.cljk"
                       :node-name node-name :materialize :none :publish? false
                       :settle-ms 0 :signoff-dids []})
                     (catch :default e {:status :error :error (ex-message e)}))

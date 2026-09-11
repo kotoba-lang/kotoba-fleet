@@ -2,7 +2,7 @@
  :status :qualified
  :implementation {:pull-request "https://github.com/kotoba-lang/kotoba-fleet/pull/2"
                   :merge-commit "ab7da63217ada84606bfb89cb69b87b95c7d99a0"}
- :source-of-truth {:legacy "src/kotoba/fleet/lease.cljc"
+ :source-of-truth {:legacy "src/kotoba/fleet/lease.cljk"
                    :kernel "src/kotoba/fleet/bounded_lease.kotoba"}
  :domain {:work-units :one-preselected-by-host
           :maximum-claims 4 :agent-id :positive-i64 :ordinal :unique-nonnegative-i64
@@ -11,7 +11,7 @@
           :overflow-policy :elapsed-subtraction-after-order-validation}
  :excluded [:datom-reconstruction :work-filtering :string-identifiers
             :claim-append :atomic-ordinal-allocation :release-append :storage]
- :evidence {:cljc-oracle "test/kotoba/fleet/bounded_lease_matrix_test.clj"
+ :evidence {:cljc-oracle "test/kotoba/fleet/bounded_lease_matrix_test.cljk"
             :kotoba-conformance "test/kotoba/fleet/bounded_lease_conformance.kotoba"
             :web-wasm-verifier "scripts/verify-kotoba-bounded-lease.mjs"
             :cases-per-target 19

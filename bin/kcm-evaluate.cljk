@@ -55,7 +55,7 @@
               :nbb-cli (path/join runtime-root "node_modules/nbb/cli.js")
               :classpath (path/join runtime-root "runner/hosts/nbb")
               :sandbox-agent (path/join runtime-root
-                                        "runner/hosts/nbb/fleet/sandbox_agent.cljs")}}))
+                                        "runner/hosts/nbb/fleet/sandbox_agent.cljk")}}))
 
 (defn run-sandbox-agent [runner spec-path]
   (if runner
@@ -63,7 +63,7 @@
          ["--stack-size=4096" (:nbb-cli runner) "--classpath" (:classpath runner)
           (:sandbox-agent runner) "--spec" spec-path "--kcm-probe"] {})
     (run "nbb" ["--classpath" "hosts/nbb"
-                "hosts/nbb/fleet/sandbox_agent.cljs"
+                "hosts/nbb/fleet/sandbox_agent.cljk"
                 "--spec" spec-path "--kcm-probe"] {})))
 
 (defn main []
@@ -103,7 +103,7 @@
     (let [provider-build
           (or (:provider-build installed)
               (-> (run "nbb" ["--classpath" "hosts/nbb"
-                               "scripts/build-kcm-provider.cljs"
+                               "scripts/build-kcm-provider.cljk"
                                "--compiler" compiler "--out" provider-prefix] {})
                   str/split-lines last reader/read-string))
           spec (evaluate/complete-spec
