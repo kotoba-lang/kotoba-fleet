@@ -90,8 +90,8 @@
                       :endpoint endpoint :model model :budget (:budget spec)
                       :exec-backing (get spec :exec-backing :sandbox-exec)})
         local-spec (path/join state-dir (str (:work-id spec) "-spec.edn"))
-        kcm-src (path/join (path/dirname agent-src) "kcm.cljs")
-        provider-src (path/join (path/dirname agent-src) "kcm_provider.cljs")
+        kcm-src (path/join (path/dirname agent-src) "kcm.cljk")
+        provider-src (path/join (path/dirname agent-src) "kcm_provider.cljk")
         started (now)]
     (cli/say (str "  model: " model
                   (when (:alias-for resolved) (str " → " (:alias-for resolved)))
@@ -100,8 +100,8 @@
     (node/ssh node-name (str "rm -rf " remote-root " && mkdir -p " remote-root "/fleet"))
     (node/scp! node-name tarball (str remote-root "/repo.tgz"))
     (node/scp! node-name agent-src (str remote-root "/"))
-    (node/scp! node-name kcm-src (str remote-root "/fleet/kcm.cljs"))
-    (node/scp! node-name provider-src (str remote-root "/fleet/kcm_provider.cljs"))
+    (node/scp! node-name kcm-src (str remote-root "/fleet/kcm.cljk"))
+    (node/scp! node-name provider-src (str remote-root "/fleet/kcm_provider.cljk"))
     (when remote-provider
       (node/scp! node-name (:archive provider) (:archive remote-provider))
       (node/scp! node-name (:manifest provider) (:manifest remote-provider)))
