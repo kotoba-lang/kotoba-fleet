@@ -60,7 +60,7 @@
           ;; the containment probe: ship the sandbox agent and ask the node to
           ;; try the escapes itself
           (let [remote-root (str "/tmp/fleet-probe-" (.-pid js/process))
-                remote (str remote-root "/sandbox_agent.cljs")
+                remote (str remote-root "/sandbox_agent.cljk")
                 kcm-path (path/join (path/dirname agent-path) "kcm.cljk")
                 provider-path (path/join (path/dirname agent-path) "kcm_provider.cljk")
                 _ (ssh node (str "rm -rf " remote-root " && mkdir -p " remote-root "/fleet"))
