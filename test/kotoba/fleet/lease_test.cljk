@@ -1,5 +1,5 @@
 (ns kotoba.fleet.lease-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.fleet.lease :as lease]
             [kotoba.fleet.store :as store]))
 

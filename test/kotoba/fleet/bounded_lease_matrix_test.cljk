@@ -1,5 +1,5 @@
 (ns kotoba.fleet.bounded-lease-matrix-test
-  (:require [clojure.test :refer [deftest is]]))
+  (:require [kotoba.test :refer [deftest is]]))
 
 (defn oracle [data]
   (if (< (count data) 2) -1
