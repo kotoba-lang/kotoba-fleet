@@ -21,7 +21,7 @@
     ;; kotobase.net (self-minted CACAO, :cap/transact scope = key-derived graph):
     (db-api-store {:api  (langchain.kotoba-db/kotoba-api host-caps)
                    :conn (langchain.kotoba-db/kotoba-conn url graph {:cacao b64 :did did})})"
-  (:require #?(:clj [clojure.edn :as edn] :cljs [cljs.reader :as edn])))
+  (:require #?(:clj [kotoba.lang.edn :as edn] :cljs [cljs.reader :as edn])))
 
 (defn- enc [x] (pr-str x))
 (defn- dec* [s] (edn/read-string s))
