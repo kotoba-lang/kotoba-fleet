@@ -1,5 +1,5 @@
 (ns kotoba.fleet.evolution-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.fleet.evolution :as evolution]))
 
 (def attested (zipmap evolution/required-attestations (repeat true)))

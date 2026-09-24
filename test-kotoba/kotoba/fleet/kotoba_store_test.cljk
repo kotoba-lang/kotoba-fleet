@@ -4,7 +4,7 @@
   the MemStore ≡ real-Datom-backend guarantee. Run: kbb -M:kotoba
   (langchain.db stands in for the kotobase.net XRPC backend; both implement the
   identical {:q :transact! :db :pull :entid} db-api map)."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [langchain.db :as ldb]
             [kotoba.fleet.kotoba-store :as ks]
             [kotoba.fleet.agent :as agent]

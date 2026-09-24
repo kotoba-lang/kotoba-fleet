@@ -1,5 +1,5 @@
 (ns kotoba.fleet.governor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.fleet.core :as core]
             [kotoba.fleet.governor :as gov]
             [kotoba.fleet.store :as store]))
