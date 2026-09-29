@@ -132,7 +132,7 @@
                   :module-lock-sha256 (provider/file-sha256 lock-path)
                   :entry {:nbb-cli "node_modules/nbb/cli.js"
                           :classpath (vec classpath)
-                          :main "compiler/src/kotoba/compiler/nbb/cli.cljs"
+                          :main "compiler/src/kotoba/compiler/nbb/cli.cljk"
                           :runner-classpath ["runner/hosts/nbb"]
                           :kcm-evaluate "runner/bin/kcm-evaluate.cljk"
                           :kcm-verify "runner/bin/kcm-verify.cljk"
